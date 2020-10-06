@@ -3,6 +3,7 @@ pragma solidity 0.7.2;
 
 import "./external/IAave.sol";
 import "./external/IBalancer.sol";
+import "./external/IERC20.sol";
 import "./external/IUniswap.sol";
 import "./external/IWeth.sol";
 
@@ -122,6 +123,10 @@ contract Arbrito is IAaveBorrower {
 
     uint256 wethOutput;
     if (tokenSource == uniswapAddress) {
+      require(
+        IERC20(wethAddress).approve(uniswapAddress, ethInput),
+        "Uniswap weth allowance failed"
+      );
       (path[0], path[1]) = (wethAddress, tokenAddress);
       uint256 tokenAmount = IUniswap(uniswapAddress).swapExactTokensForTokens(
         ethInput,
@@ -130,6 +135,10 @@ contract Arbrito is IAaveBorrower {
         me,
         block.timestamp
       )[1];
+      require(
+        IERC20(tokenAddress).approve(balancerAddress, tokenAmount),
+        "Balancer token allowance failed"
+      );
       (wethOutput, ) = IBalancer(balancerAddress).swapExactAmountIn(
         tokenAddress,
         tokenAmount,
@@ -138,12 +147,20 @@ contract Arbrito is IAaveBorrower {
         uint256(-1)
       );
     } else {
+      require(
+        IERC20(wethAddress).approve(balancerAddress, ethInput),
+        "Balancer weth allowance failed"
+      );
       (uint256 tokenAmount, ) = IBalancer(balancerAddress).swapExactAmountIn(
         wethAddress,
         ethInput,
         tokenAddress,
         0,
         uint256(-1)
+      );
+      require(
+        IERC20(tokenAddress).approve(uniswapAddress, tokenAmount),
+        "Uniswap token allowance failed"
       );
       (path[0], path[1]) = (tokenAddress, wethAddress);
       wethOutput = IUniswap(uniswapAddress).swapExactTokensForTokens(
@@ -160,4 +177,10 @@ contract Arbrito is IAaveBorrower {
     require(reserve == ethAddress, "Unknown reserve");
     require(payable(aaveAddress).send(ethInput + fee), "Payback failed");
   }
+
+  function uniswapSwap(
+    uint256 amount,
+    address fromToken,
+    address toToken
+  ) internal returns (uint256) {}
 }

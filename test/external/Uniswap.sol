@@ -40,6 +40,8 @@ contract Uniswap is IUniswap {
       "Transfer in failed"
     );
 
+    require(IERC20(path[1]).approve(me, amounts[1]), "Approval failed");
+
     require(
       IERC20(path[1]).transferFrom(me, to, amounts[1]),
       "Transfer out failed"

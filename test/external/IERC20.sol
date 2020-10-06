@@ -9,10 +9,18 @@ interface IERC20 {
   ) external returns (bool);
 
   function balanceOf(address account) external view returns (uint256);
+
+  function allowance(address owner, address spender)
+    external
+    view
+    returns (uint256);
+
+  function approve(address spender, uint256 amount) external returns (bool);
 }
 
 contract ERC20 is IERC20 {
   mapping(address => uint256) balances;
+  mapping(address => mapping(address => uint256)) allowances;
 
   function balanceOf(address account) external override view returns (uint256) {
     return balances[account];
@@ -23,12 +31,33 @@ contract ERC20 is IERC20 {
     address recipient,
     uint256 amount
   ) external override returns (bool) {
+    require(allowances[sender][msg.sender] >= amount, "No allowance");
+    allowances[sender][msg.sender] -= amount;
+
     if (balances[sender] < amount) {
       return false;
     }
 
     balances[sender] -= amount;
     balances[recipient] += amount;
+    return true;
+  }
+
+  function allowance(address owner, address spender)
+    external
+    override
+    view
+    returns (uint256)
+  {
+    return allowances[owner][spender];
+  }
+
+  function approve(address spender, uint256 amount)
+    external
+    override
+    returns (bool)
+  {
+    allowances[msg.sender][spender] = amount;
     return true;
   }
 }

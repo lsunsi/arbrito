@@ -83,6 +83,8 @@ contract Balancer is IBalancer {
       "Transfer in failed"
     );
 
+    require(IERC20(tokenOut).approve(me, amountOut), "Approval failed");
+
     require(
       tokenOut20.transferFrom(me, msg.sender, amountOut),
       "Transfer out failed"
