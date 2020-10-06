@@ -35,18 +35,10 @@ contract Arbrito is IAaveBorrower {
 
   receive() external payable {}
 
-  modifier onlyOwner() {
+  function setWethInput(uint256 input, uint256 minProfit) public {
     require(msg.sender == owner, "You're not the owner, so no.");
-    _;
-  }
-
-  function setWethInput(uint256 input, uint256 minProfit) public onlyOwner {
     wethMinProfit = minProfit;
     wethInput = input;
-  }
-
-  function withdraw() public onlyOwner {
-    msg.sender.transfer(address(this).balance);
   }
 
   function perform(address tokenAddress, address balancerAddress) public {
@@ -96,11 +88,8 @@ contract Arbrito is IAaveBorrower {
     );
 
     address me = address(this);
-    uint256 balanceBefore = me.balance;
     IAave(aaveAddress).flashLoan(me, ethAddress, wethInput, params);
-    uint256 balanceAfter = me.balance;
-
-    require(balanceAfter >= balanceBefore, "Something bad is not right");
+    require(msg.sender.send(me.balance), "Profits transfer failed");
   }
 
   function executeOperation(
