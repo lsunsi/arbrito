@@ -89,14 +89,13 @@ contract Arbrito is IAaveBorrower {
 
     require(wethOutput - wethInput >= wethMinProfit, "Not worth our trouble");
 
-    address me = address(this);
     bytes memory params = abi.encode(
       tokenAddress,
       balancerAddress,
-      tokenSource,
-      me
+      tokenSource
     );
 
+    address me = address(this);
     uint256 balanceBefore = me.balance;
     IAave(aaveAddress).flashLoan(me, ethAddress, wethInput, params);
     uint256 balanceAfter = me.balance;
@@ -110,68 +109,46 @@ contract Arbrito is IAaveBorrower {
     uint256 fee,
     bytes calldata params
   ) external override {
-    address[] memory path = new address[](2);
+    (address tokenAddress, address balancerAddress, address tokenSource) = abi
+      .decode(params, (address, address, address));
 
-    (
-      address tokenAddress,
-      address balancerAddress,
-      address tokenSource,
-      address me
-    ) = abi.decode(params, (address, address, address, address));
-
+    // ETH -> WETH
     IWeth(wethAddress).deposit{ value: ethInput }();
 
     uint256 wethOutput;
     if (tokenSource == uniswapAddress) {
-      require(
-        IERC20(wethAddress).approve(uniswapAddress, ethInput),
-        "Uniswap weth allowance failed"
-      );
-      (path[0], path[1]) = (wethAddress, tokenAddress);
-      uint256 tokenAmount = IUniswap(uniswapAddress).swapExactTokensForTokens(
-        ethInput,
-        0,
-        path,
-        me,
-        block.timestamp
-      )[1];
-      require(
-        IERC20(tokenAddress).approve(balancerAddress, tokenAmount),
-        "Balancer token allowance failed"
-      );
-      (wethOutput, ) = IBalancer(balancerAddress).swapExactAmountIn(
-        tokenAddress,
-        tokenAmount,
+      // WETH -> TOKEN
+      uint256 tokenAmount = uniswapSwap(
+        address(this),
         wethAddress,
-        0,
-        uint256(-1)
+        tokenAddress,
+        ethInput
+      );
+      // TOKEN -> WETH
+      wethOutput = balancerSwap(
+        balancerAddress,
+        tokenAddress,
+        wethAddress,
+        tokenAmount
       );
     } else {
-      require(
-        IERC20(wethAddress).approve(balancerAddress, ethInput),
-        "Balancer weth allowance failed"
-      );
-      (uint256 tokenAmount, ) = IBalancer(balancerAddress).swapExactAmountIn(
+      // WETH -> TOKEN
+      uint256 tokenAmount = balancerSwap(
+        balancerAddress,
         wethAddress,
-        ethInput,
         tokenAddress,
-        0,
-        uint256(-1)
+        ethInput
       );
-      require(
-        IERC20(tokenAddress).approve(uniswapAddress, tokenAmount),
-        "Uniswap token allowance failed"
+      // TOKEN -> WETH
+      wethOutput = uniswapSwap(
+        address(this),
+        tokenAddress,
+        wethAddress,
+        tokenAmount
       );
-      (path[0], path[1]) = (tokenAddress, wethAddress);
-      wethOutput = IUniswap(uniswapAddress).swapExactTokensForTokens(
-        tokenAmount,
-        0,
-        path,
-        me,
-        block.timestamp
-      )[1];
     }
 
+    // WETH -> ETH
     IWeth(wethAddress).withdraw(wethOutput);
 
     require(reserve == ethAddress, "Unknown reserve");
@@ -179,8 +156,44 @@ contract Arbrito is IAaveBorrower {
   }
 
   function uniswapSwap(
-    uint256 amount,
-    address fromToken,
-    address toToken
-  ) internal returns (uint256) {}
+    address me,
+    address sourceToken,
+    address targetToken,
+    uint256 sourceAmount
+  ) internal returns (uint256) {
+    address[] memory path = new address[](2);
+    (path[0], path[1]) = (sourceToken, targetToken);
+    require(
+      IERC20(sourceToken).approve(uniswapAddress, sourceAmount),
+      "Uniswap weth allowance failed"
+    );
+    uint256 targetAmount = IUniswap(uniswapAddress).swapExactTokensForTokens(
+      sourceAmount,
+      0,
+      path,
+      me,
+      block.timestamp
+    )[1];
+    return targetAmount;
+  }
+
+  function balancerSwap(
+    address balancer,
+    address sourceToken,
+    address targetToken,
+    uint256 sourceAmount
+  ) internal returns (uint256) {
+    require(
+      IERC20(sourceToken).approve(balancer, sourceAmount),
+      "Balancer token allowance failed"
+    );
+    (uint256 targetOutput, ) = IBalancer(balancer).swapExactAmountIn(
+      sourceToken,
+      sourceAmount,
+      targetToken,
+      0,
+      uint256(-1)
+    );
+    return targetOutput;
+  }
 }
