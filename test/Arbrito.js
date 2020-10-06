@@ -66,57 +66,6 @@ contract("Arbrito", ([owner, other]) => {
     expect(balanceAfter - balanceBefore).equal(123);
   });
 
-  it("allows the full withdrawal of funds by the owner", async () => {
-    const [arbrito] = await deployContracts();
-
-    expect(await web3.eth.getBalance(arbrito.address)).equal("0");
-
-    await web3.eth.sendTransaction({
-      from: other,
-      to: arbrito.address,
-      value: 123,
-    });
-
-    expect(await web3.eth.getBalance(arbrito.address)).equal("123");
-
-    const ownerBalanceBefore = new web3.utils.BN(
-      await web3.eth.getBalance(owner)
-    );
-
-    const gasPrice = new web3.utils.BN(await web3.eth.getGasPrice());
-
-    const gasUsed = await arbrito
-      .withdraw({ from: owner })
-      .then((tx) => new web3.utils.BN(tx.receipt.gasUsed));
-
-    const ownerBalanceAfter = new web3.utils.BN(
-      await web3.eth.getBalance(owner)
-    );
-
-    expect(await web3.eth.getBalance(arbrito.address)).equal("0");
-    expect(
-      ownerBalanceAfter
-        .add(gasPrice.mul(gasUsed))
-        .sub(ownerBalanceBefore)
-        .toString()
-    ).equal("123");
-
-    await web3.eth.sendTransaction({
-      from: other,
-      to: arbrito.address,
-      value: 123,
-    });
-
-    let error;
-    try {
-      await arbrito.withdraw({ from: other });
-    } catch (e) {
-      error = e;
-    }
-
-    expect(error).match(/so no/);
-  });
-
   it("refuses trying anything if uniswap and balancer mostly agree on price", async () => {
     const [arbrito, link, weth, uniswap, balancer] = await deployContracts();
 
@@ -196,7 +145,10 @@ contract("Arbrito", ([owner, other]) => {
     });
 
     // Try to arbitrage
-    await arbrito.perform(link.address, balancer.address);
+    const ownerBalanceBefore = new web3.utils.BN(
+      await web3.eth.getBalance(owner)
+    );
+    const tx = await arbrito.perform(link.address, balancer.address);
 
     // Uniswap's LINK price is not 0.08 ETH
     expect((await link.balanceOf(uniswap.address)).toString()).equal(
@@ -214,12 +166,23 @@ contract("Arbrito", ([owner, other]) => {
       web3.utils.toWei("910", "ether")
     );
 
-    // Verify arbitrage worked
+    // Contract keeps nothing
     expect((await link.balanceOf(arbrito.address)).toString()).equal("0");
     expect((await weth.balanceOf(arbrito.address)).toString()).equal("0");
-    expect((await web3.eth.getBalance(arbrito.address)).toString()).equal(
-      web3.utils.toWei("1.011111111111111111", "ether")
+    expect(await web3.eth.getBalance(arbrito.address)).equal("0");
+
+    // Verify arbitrage worked
+    const ownerBalanceAfter = new web3.utils.BN(
+      await web3.eth.getBalance(owner)
     );
+
+    const gasCost = new web3.utils.BN(await web3.eth.getGasPrice()).mul(
+      new web3.utils.BN(tx.receipt.gasUsed)
+    );
+
+    expect(
+      ownerBalanceAfter.add(gasCost).sub(ownerBalanceBefore).toString()
+    ).equal(web3.utils.toWei("1.011111111111111111", "ether"));
   });
 
   it("extracts profit if the token's cheaper on uniswap than balancer", async () => {
@@ -254,7 +217,10 @@ contract("Arbrito", ([owner, other]) => {
     });
 
     // Try to arbitrage
-    await arbrito.perform(link.address, balancer.address);
+    const ownerBalanceBefore = new web3.utils.BN(
+      await web3.eth.getBalance(owner)
+    );
+    const tx = await arbrito.perform(link.address, balancer.address);
 
     // Uniswap's LINK price is not 0.092022472 ETH
     expect((await link.balanceOf(uniswap.address)).toString()).equal(
@@ -272,11 +238,22 @@ contract("Arbrito", ([owner, other]) => {
       web3.utils.toWei("88.888888888888888889", "ether")
     );
 
-    // Verify arbitrage worked
+    // Contract keeps nothing
     expect((await link.balanceOf(arbrito.address)).toString()).equal("0");
     expect((await weth.balanceOf(arbrito.address)).toString()).equal("0");
-    expect((await web3.eth.getBalance(arbrito.address)).toString()).equal(
-      web3.utils.toWei("1.011111111111111111", "ether")
+    expect(await web3.eth.getBalance(arbrito.address)).equal("0");
+
+    // Verify arbitrage worked
+    const ownerBalanceAfter = new web3.utils.BN(
+      await web3.eth.getBalance(owner)
     );
+
+    const gasCost = new web3.utils.BN(await web3.eth.getGasPrice()).mul(
+      new web3.utils.BN(tx.receipt.gasUsed)
+    );
+
+    expect(
+      ownerBalanceAfter.add(gasCost).sub(ownerBalanceBefore).toString()
+    ).equal(web3.utils.toWei("1.011111111111111111", "ether"));
   });
 });
