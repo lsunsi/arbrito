@@ -1,0 +1,16 @@
+[package]
+name = "pooller"
+version = "0.1.0"
+authors = ["lsunsi <sunsi.lucas@gmail.com>", "FelipeRosa <felipe.sgrosa@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+web3 = "0.13.0"
+ethcontract = "0.8.0"
+
+[dependencies.tokio]
+version = "0.2.22"
+features = ["macros"]
+
+[build-dependencies]
+ethcontract-generate = "0.8.0"
