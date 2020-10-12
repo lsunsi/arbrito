@@ -1192,6 +1192,7 @@ version = "0.1.0"
 dependencies = [
  "ethcontract",
  "ethcontract-generate",
+ "futures 0.3.6",
  "tokio",
  "web3",
 ]
