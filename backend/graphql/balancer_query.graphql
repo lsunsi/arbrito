@@ -1,0 +1,16 @@
+query BalancerGetPools(
+  $tokens: [String!]!
+  $maxSwapFee: BigDecimal!
+  $minLiquidity: BigDecimal!
+) {
+  pools(
+    where: {
+      tokensList_contains: $tokens
+      liquidity_gte: $minLiquidity
+      swapFee_lte: $maxSwapFee
+      finalized: true
+    }
+  ) {
+    id
+  }
+}
