@@ -19,10 +19,13 @@ enum ArbritageResult {
 }
 
 fn u256_to_pretty_eth_string(n: U256) -> String {
-    let integer = n / 10u64.pow(18);
-    let decimals = n / 10u64.pow(14) % 10u64.pow(4);
-
-    format!("Ξ {}.{}", integer, decimals)
+    let int = (n / 10u64.pow(14)).as_u64();
+    format!(
+        "Ξ  {}.{:04} ({})",
+        int / 10u64.pow(4),
+        int % 10u64.pow(4),
+        n
+    )
 }
 
 impl Debug for ArbritageResult {
