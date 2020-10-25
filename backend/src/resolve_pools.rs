@@ -7,8 +7,8 @@ const UNISWAP_URL: &str = "https://api.thegraph.com/subgraphs/name/ianlapham/uni
 const BALANCER_URL: &str = "https://api.thegraph.com/subgraphs/name/balancer-labs/balancer-beta";
 const WETH_ADDRESS: &str = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
 
-const UNISWAP_MIN_ETH_RESERVE: i64 = 30_000;
-const BALANCER_MIN_LIQUIDITY: u64 = 100_000;
+const UNISWAP_MIN_ETH_RESERVE: i64 = 10_000;
+const BALANCER_MIN_LIQUIDITY: u64 = 10_000;
 const BALANCER_MAX_SWAP_FEE: f64 = 0.01;
 
 #[derive(GraphQLQuery)]
