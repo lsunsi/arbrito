@@ -9,13 +9,14 @@ use web3::types::{H160, U256};
 const WETH_ADDRESS: &str = "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
 const UNISWAP_ADDRESS: &str = "7a250d5630B4cF539739dF2C5dAcb4c659F2488D";
 
-const ETH_INPUT: &str = "8AC7230489E80000"; // 10 eth
-const ETH_MIN_PROFIT: &str = "16345785D8A0000"; // 0.1 eth
+const ETH_INPUT_TOLERANCE: &str = "2386F26FC10000"; // 0.01 eth
+const ETH_INPUT_HI: &str = "8AC7230489E80000"; // 10 eth
+const ETH_INPUT_LO: &str = "16345785D8A0000"; // 0.1 eth
 
-enum ArbritageResult {
-    Deficit(U256),
-    Neutral(U256),
-    Profit(U256),
+struct ArbritageResult {
+    input: U256,
+    delta: U256,
+    profit: bool,
 }
 
 fn u256_to_pretty_eth_string(n: U256) -> String {
@@ -30,13 +31,13 @@ fn u256_to_pretty_eth_string(n: U256) -> String {
 
 impl Debug for ArbritageResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let message = match self {
-            ArbritageResult::Deficit(p) => format!("🔴 {}", u256_to_pretty_eth_string(*p)),
-            ArbritageResult::Neutral(p) => format!("🟡 {}", u256_to_pretty_eth_string(*p)),
-            ArbritageResult::Profit(p) => format!("🟢 {}", u256_to_pretty_eth_string(*p)),
-        };
-
-        f.write_str(&message)
+        f.write_str(&format!(
+            "{} : {} Δ {} % {}",
+            if self.profit { "🟢" } else { "🔴" },
+            u256_to_pretty_eth_string(self.input),
+            u256_to_pretty_eth_string(self.delta),
+            (self.input + self.delta) / self.input
+        ))
     }
 }
 
@@ -78,7 +79,6 @@ async fn arbritage(
     weth_address: H160,
     token_address: H160,
     eth_input: U256,
-    eth_min_profit: U256,
 ) -> Result<ArbritageResult, MethodError> {
     let token_uniswap_output =
         uniswap_swap(&uniswap, weth_address, token_address, eth_input).await?;
@@ -91,13 +91,49 @@ async fn arbritage(
         uniswap_swap(&uniswap, token_address, weth_address, token_balancer_output).await
     }?;
 
-    Ok(if weth_output < eth_input {
-        ArbritageResult::Deficit(eth_input - weth_output)
-    } else if weth_output - eth_input < eth_min_profit {
-        ArbritageResult::Neutral(weth_output - eth_input)
+    Ok(if weth_output <= eth_input {
+        ArbritageResult {
+            input: eth_input,
+            delta: eth_input - weth_output,
+            profit: false,
+        }
     } else {
-        ArbritageResult::Profit(weth_output - eth_input)
+        ArbritageResult {
+            input: eth_input,
+            delta: weth_output - eth_input,
+            profit: true,
+        }
     })
+}
+
+async fn arbritage_search(
+    uniswap: &Uniswap,
+    balancer: &Balancer,
+    weth_address: H160,
+    token_address: H160,
+    eth_input_tolerance: U256,
+    mut eth_input_lo: U256,
+    mut eth_input_hi: U256,
+) -> Result<ArbritageResult, MethodError> {
+    let mut acc = arbritage(uniswap, balancer, weth_address, token_address, eth_input_lo).await?;
+
+    if !acc.profit {
+        return Ok(acc);
+    }
+
+    while eth_input_hi - eth_input_lo > eth_input_tolerance {
+        let eth_input = (eth_input_hi + eth_input_lo) / 2;
+        let acc2 = arbritage(uniswap, balancer, weth_address, token_address, eth_input).await?;
+
+        if acc2.profit && acc2.delta > acc.delta {
+            eth_input_lo = eth_input;
+            acc = acc2;
+        } else {
+            eth_input_hi = eth_input;
+        }
+    }
+
+    Ok(acc)
 }
 
 pub async fn watch_pools(
@@ -109,8 +145,9 @@ pub async fn watch_pools(
     let uniswap = Uniswap::at(&web3, H160::from_str(UNISWAP_ADDRESS)?);
     let weth_address = H160::from_str(WETH_ADDRESS)?;
 
-    let eth_input = U256::from_str(ETH_INPUT)?;
-    let eth_min_profit = U256::from_str(ETH_MIN_PROFIT)?;
+    let eth_input_lo = U256::from_str(ETH_INPUT_LO)?;
+    let eth_input_hi = U256::from_str(ETH_INPUT_HI)?;
+    let eth_input_tolerance = U256::from_str(ETH_INPUT_TOLERANCE)?;
 
     let mut balancers: Vec<(Balancer, H160, &str)> = vec![];
     for pool in &balancer_pools {
@@ -140,17 +177,21 @@ pub async fn watch_pools(
                 let u = &uniswap;
 
                 futs.push(async move {
-                    let result = arbritage(
+                    let result = arbritage_search(
                         u,
                         balancer,
                         weth_address,
                         *token_address,
-                        eth_input,
-                        eth_min_profit,
+                        eth_input_tolerance,
+                        eth_input_lo,
+                        eth_input_hi,
                     )
-                    .await;
+                    .await
+                    .unwrap();
 
-                    println!("#{}\t{:?}\t{}", balancer.address(), result, name);
+                    if result.profit {
+                        println!("#{}\t{:?}\t{}", balancer.address(), result, name);
+                    }
                 });
             }
 
