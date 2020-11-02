@@ -8,7 +8,9 @@ query BalancerGetPools(
       tokensList_contains: $tokens
       liquidity_gte: $minLiquidity
       swapFee_lte: $maxSwapFee
+      publicSwap: true
       finalized: true
+      active: true
     }
   ) {
     id
