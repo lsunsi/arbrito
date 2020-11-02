@@ -1,19 +1,15 @@
-query UniswapGetPairs($wethAddress: String!, $minReserveETH: BigDecimal!) {
-  pairs0: pairs(
-    where: { token0: $wethAddress, trackedReserveETH_gte: $minReserveETH }
-  ) {
-    token: token1 {
+query UniswapGetPairs($minReserveETH: BigDecimal!) {
+  pairs(where: { trackedReserveETH_gte: $minReserveETH }) {
+    id
+    token0 {
       id
-      name
+      symbol
+      decimals
     }
-  }
-
-  pairs1: pairs(
-    where: { token1: $wethAddress, trackedReserveETH_gte: $minReserveETH }
-  ) {
-    token: token0 {
+    token1 {
       id
-      name
+      symbol
+      decimals
     }
   }
 }
