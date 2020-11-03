@@ -1,3 +1,4 @@
+use colored::{ColoredString, Colorize};
 use pooller::{
     gen::{Balancer, Uniswap},
     Pairs, Token,
@@ -11,23 +12,38 @@ use web3::{
 };
 
 const UNISWAP_ADDRESS: &str = "7a250d5630B4cF539739dF2C5dAcb4c659F2488D";
+const WETH_ADDRESS: &str = "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
 const WEB3_ENDPOINT: &str = "ws://127.0.0.1:8546";
 
 fn format_amount(token: &Token, amount: U256) -> String {
     let d = U256::exp10(token.decimals as usize);
     format!(
-        "{}.{:03$} {}",
+        "{: <4} {}.{:03$}",
+        token.symbol,
         (amount / d).as_u128(),
         (amount % d).as_u128(),
-        token.symbol,
         token.decimals as usize,
     )
 }
 
+fn color_eth_output(amount: U256, str: String) -> ColoredString {
+    if amount >= U256::exp10(18) {
+        str.bright_green().bold().italic().underline()
+    } else if amount >= U256::exp10(17) {
+        str.bright_green().bold()
+    } else if amount >= U256::exp10(16) {
+        str.green()
+    } else if amount >= U256::exp10(15) {
+        str.yellow().dimmed()
+    } else {
+        str.dimmed()
+    }
+}
+
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 enum ArbritageResult {
-    Deficit(U256),
-    Profit(U256),
+    Profit(U256, U256),
+    Deficit,
 }
 
 struct ArbritageAttempt<'a> {
@@ -37,10 +53,11 @@ struct ArbritageAttempt<'a> {
 }
 
 struct ArbritagePair<'a> {
+    uniswap: &'a Uniswap,
     balancer: Balancer,
-    uniswap: Uniswap,
     token0: &'a Token,
     token1: &'a Token,
+    weth: &'a Token,
 }
 
 impl<'a> ArbritagePair<'a> {
@@ -88,10 +105,24 @@ impl<'a> ArbritagePair<'a> {
             .await
             .expect("balancer calc_out_given_in failed");
 
-        let result = if balancer_amount > uniswap_amount {
-            ArbritageResult::Profit(balancer_amount - uniswap_amount)
+        let result = if balancer_amount < uniswap_amount {
+            ArbritageResult::Deficit
+        } else if target.address == self.weth.address {
+            let profit = balancer_amount - uniswap_amount;
+            ArbritageResult::Profit(profit, profit)
         } else {
-            ArbritageResult::Deficit(uniswap_amount - balancer_amount)
+            let target_profit = balancer_amount - uniswap_amount;
+            let weth_profit = self
+                .uniswap
+                .get_amounts_out(
+                    balancer_amount - uniswap_amount,
+                    vec![target.address, self.weth.address],
+                )
+                .call()
+                .await
+                .expect("uniswap get_amounts_out failed")[1];
+
+            ArbritageResult::Profit(weth_profit, target_profit)
         };
 
         ArbritageAttempt {
@@ -112,18 +143,23 @@ impl<'a> ArbritagePair<'a> {
 #[tokio::main]
 async fn main() {
     let web3 = Web3::new(WebSocket::new(WEB3_ENDPOINT).await.expect("ws failed"));
+
+    let weth_address = H160::from_str(WETH_ADDRESS).expect("failed parsing weth address");
     let uniswap_router = H160::from_str(UNISWAP_ADDRESS).expect("failed parsing uniswap address");
+    let uniswap = Uniswap::at(&web3, uniswap_router);
 
     let Pairs { tokens, pairs } = Pairs::read().expect("pairs reading failed");
     let tokens: HashMap<_, _> = tokens.into_iter().map(|t| (t.address, t)).collect();
+    let weth = tokens.get(&weth_address).expect("where's my weth, boy?");
 
     let arbritage_pairs: Vec<_> = pairs
         .into_iter()
         .map(|pair| ArbritagePair {
-            balancer: Balancer::at(&web3, pair.balancer),
-            uniswap: Uniswap::at(&web3, uniswap_router),
             token0: tokens.get(&pair.token0).expect("unknown token"),
             token1: tokens.get(&pair.token1).expect("unknown token"),
+            balancer: Balancer::at(&web3, pair.balancer),
+            uniswap: &uniswap,
+            weth: &weth,
         })
         .collect();
 
@@ -141,18 +177,19 @@ async fn main() {
 
             let attempt_futs = arbritage_pairs.iter().map(ArbritagePair::attempts);
             let mut attempts: Vec<_> = join_all(attempt_futs).await.into_iter().flatten().collect();
-            attempts.sort_unstable_by(|a1, a2| a1.result.cmp(&a2.result));
+            attempts.sort_unstable_by(|a1, a2| a2.result.cmp(&a1.result));
 
             let mut deficit_count = 0;
             for attempt in attempts {
                 match attempt.result {
-                    ArbritageResult::Deficit(_) => deficit_count += 1,
-                    ArbritageResult::Profit(amount) => {
+                    ArbritageResult::Deficit => deficit_count += 1,
+                    ArbritageResult::Profit(weth_amount, target_amount) => {
                         let (token0, token1) = attempt.tokens;
                         println!(
-                            "🟢 {} -> {}",
+                            " {0: <30} <-> {1: <30} ~> {2: <30}",
                             format_amount(token0, attempt.amount),
-                            format_amount(token1, amount)
+                            format_amount(token1, target_amount),
+                            color_eth_output(weth_amount, format_amount(weth, weth_amount))
                         );
                     }
                 }
