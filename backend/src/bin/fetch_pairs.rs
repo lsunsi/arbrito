@@ -129,17 +129,26 @@ fn build_pairs(uniswap_pairs: Vec<(H160, Token, Token)>, balancer_pools: Vec<Vec
 
     for ((uniswap, token0, token1), balancers) in uniswap_pairs.into_iter().zip(balancer_pools) {
         for balancer in balancers {
-            pairs.push(Pair {
-                token0: token0.address.clone(),
-                token1: token1.address.clone(),
-                balancer: balancer.clone(),
-                uniswap: uniswap.clone(),
-            });
+            pairs.push(
+                Pair::new(
+                    token0.address.clone(),
+                    token1.address.clone(),
+                    balancer.clone(),
+                    uniswap.clone(),
+                )
+                .expect("pair creating failed"),
+            );
         }
 
         tokens.push(token0);
         tokens.push(token1);
     }
+
+    tokens.sort_unstable_by_key(|t| t.address);
+    tokens.dedup_by_key(|t| t.address);
+
+    pairs.sort_unstable_by(|p1, p2| p1.cmp(&p2));
+    pairs.dedup_by(|p1, p2| p1 == p2);
 
     Pairs { tokens, pairs }
 }
