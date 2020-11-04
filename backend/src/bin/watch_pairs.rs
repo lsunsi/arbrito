@@ -42,8 +42,8 @@ fn color_eth_output(amount: U256, str: String) -> ColoredString {
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 enum ArbritageResult {
-    Profit(U256, U256),
     Deficit,
+    Profit(U256, U256),
 }
 
 struct ArbritageAttempt<'a> {
@@ -61,9 +61,7 @@ struct ArbritagePair<'a> {
 }
 
 impl<'a> ArbritagePair<'a> {
-    async fn attempt(&'a self, source: &'a Token, target: &'a Token) -> ArbritageAttempt<'a> {
-        let amount = U256::exp10(source.decimals as usize);
-
+    async fn run(&self, source: &Token, target: &Token, amount: U256) -> ArbritageResult {
         let uniswap_amount = self
             .uniswap
             .get_amounts_in(amount, vec![target.address, source.address])
@@ -105,7 +103,7 @@ impl<'a> ArbritagePair<'a> {
             .await
             .expect("balancer calc_out_given_in failed");
 
-        let result = if balancer_amount < uniswap_amount {
+        if balancer_amount < uniswap_amount {
             ArbritageResult::Deficit
         } else if target.address == self.weth.address {
             let profit = balancer_amount - uniswap_amount;
@@ -123,12 +121,37 @@ impl<'a> ArbritagePair<'a> {
                 .expect("uniswap get_amounts_out failed")[1];
 
             ArbritageResult::Profit(weth_profit, target_profit)
+        }
+    }
+
+    async fn attempt(&'a self, source: &'a Token, target: &'a Token) -> ArbritageAttempt<'a> {
+        let one = if source.address == self.weth.address {
+            U256::exp10(18)
+        } else {
+            self.uniswap
+                .get_amounts_out(U256::exp10(18), vec![self.weth.address, source.address])
+                .call()
+                .await
+                .expect("uniswap get_amounts_out failed")[1]
         };
+
+        let mut amount = one;
+        let mut result = self.run(source, target, amount).await;
+
+        for i in 2..=10 {
+            let amount2 = one * i;
+            let result2 = self.run(source, target, amount2).await;
+
+            if result < result2 {
+                amount = amount2;
+                result = result2;
+            }
+        }
 
         ArbritageAttempt {
             tokens: (source, target),
-            result,
             amount,
+            result,
         }
     }
 
