@@ -1,17 +1,33 @@
 //SPDX-License-Identifier: GPL-3.0-only
-pragma solidity 0.7.2;
+pragma solidity 0.7.4;
 
-interface IUniswap {
-  function getAmountsOut(uint256 amountIn, address[] memory path)
+interface IUniswapPairCallee {
+  function uniswapV2Call(
+    address sender,
+    uint256 amount0,
+    uint256 amount1,
+    bytes calldata data
+  ) external;
+}
+
+interface IUniswapPair {
+  function token0() external view returns (address);
+
+  function token1() external view returns (address);
+
+  function getReserves()
     external
     view
-    returns (uint256[] memory amounts);
+    returns (
+      uint112 reserve0,
+      uint112 reserve1,
+      uint32 blockTimestampLast
+    );
 
-  function swapExactTokensForTokens(
-    uint256 amountIn,
-    uint256 amountOutMin,
-    address[] calldata path,
+  function swap(
+    uint256 amount0Out,
+    uint256 amount1Out,
     address to,
-    uint256 deadline
-  ) external returns (uint256[] memory amounts);
+    bytes calldata data
+  ) external;
 }
