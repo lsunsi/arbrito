@@ -1,188 +1,90 @@
 //SPDX-License-Identifier: GPL-3.0-only
-pragma solidity 0.7.2;
+pragma solidity 0.7.4;
 
-import "./external/IAave.sol";
 import "./external/IBalancer.sol";
-import "./external/IERC20.sol";
 import "./external/IUniswap.sol";
-import "./external/IWeth.sol";
+import "./external/IERC20.sol";
 
-contract Arbrito is IAaveBorrower {
-  address owner;
-  address ethAddress;
-  address wethAddress;
-  address aaveAddress;
-  address uniswapAddress;
+contract Arbrito is IUniswapPairCallee {
+  function perform(
+    bool direction,
+    uint256 amount,
+    address uniswapPair,
+    address balancerPool
+  ) external {
+    (uint256 amount0, uint256 amount1) = direction
+      ? (amount, uint256(0))
+      : (uint256(0), amount);
 
-  uint256 public wethInput;
-  uint256 public wethMinProfit;
-
-  constructor(
-    address _ethAddress,
-    address _wethAddress,
-    address _aaveAddress,
-    address _uniswapAddress
-  ) {
-    owner = msg.sender;
-    ethAddress = _ethAddress;
-    wethAddress = _wethAddress;
-    aaveAddress = _aaveAddress;
-    uniswapAddress = _uniswapAddress;
-
-    wethInput = 10 ether;
-    wethMinProfit = 0.1 ether;
+    bytes memory payload = abi.encode(balancerPool, msg.sender);
+    IUniswapPair(uniswapPair).swap(amount0, amount1, address(this), payload);
   }
 
-  receive() external payable {}
-
-  function setWethInput(uint256 input, uint256 minProfit) public {
-    require(msg.sender == owner, "You're not the owner, so no.");
-    wethMinProfit = minProfit;
-    wethInput = input;
-  }
-
-  function perform(address tokenAddress, address balancerAddress) public {
-    address[] memory path = new address[](2);
-
-    IUniswap uniswap = IUniswap(uniswapAddress);
-    IBalancer balancer = IBalancer(balancerAddress);
-
-    (path[0], path[1]) = (wethAddress, tokenAddress);
-    uint256 tokenUniswapOutput = uniswap.getAmountsOut(wethInput, path)[1];
-
-    uint256 tokenBalancerOutput = balancer.calcOutGivenIn(
-      balancer.getBalance(wethAddress),
-      balancer.getDenormalizedWeight(wethAddress),
-      balancer.getBalance(tokenAddress),
-      balancer.getDenormalizedWeight(tokenAddress),
-      wethInput,
-      balancer.getSwapFee()
-    );
-
-    uint256 wethOutput;
-    address tokenSource;
-    if (tokenUniswapOutput > tokenBalancerOutput) {
-      tokenSource = uniswapAddress;
-      wethOutput = balancer.calcOutGivenIn(
-        balancer.getBalance(tokenAddress),
-        balancer.getDenormalizedWeight(tokenAddress),
-        balancer.getBalance(wethAddress),
-        balancer.getDenormalizedWeight(wethAddress),
-        tokenUniswapOutput,
-        balancer.getSwapFee()
-      );
-    } else if (tokenBalancerOutput > tokenUniswapOutput) {
-      tokenSource = balancerAddress;
-      (path[0], path[1]) = (tokenAddress, wethAddress);
-      wethOutput = uniswap.getAmountsOut(tokenBalancerOutput, path)[1];
-    } else {
-      revert("The pools agree on the price");
-    }
-
-    require(wethOutput - wethInput >= wethMinProfit, "Not worth our trouble");
-
-    bytes memory params = abi.encode(
-      tokenAddress,
-      balancerAddress,
-      tokenSource
-    );
-
-    address me = address(this);
-    IAave(aaveAddress).flashLoan(me, ethAddress, wethInput, params);
-    require(msg.sender.send(me.balance), "Profits transfer failed");
-  }
-
-  function executeOperation(
-    address reserve,
-    uint256 ethInput,
-    uint256 fee,
-    bytes calldata params
+  function uniswapV2Call(
+    address, // sender
+    uint256 amount0,
+    uint256 amount1,
+    bytes calldata data
   ) external override {
-    (address tokenAddress, address balancerAddress, address tokenSource) = abi
-      .decode(params, (address, address, address));
+    (address balancerPoolAddress, address ownerAddress) = abi.decode(data, (address, address));
+    IBalancerPool balancerPool = IBalancerPool(balancerPoolAddress);
+    IUniswapPair uniswapPair = IUniswapPair(msg.sender);
 
-    // ETH -> WETH
-    IWeth(wethAddress).deposit{ value: ethInput }();
+    uint256 amountTrade;
+    uint256 amountPayback;
 
-    uint256 wethOutput;
-    if (tokenSource == uniswapAddress) {
-      // WETH -> TOKEN
-      uint256 tokenAmount = uniswapSwap(
-        address(this),
-        wethAddress,
-        tokenAddress,
-        ethInput
-      );
-      // TOKEN -> WETH
-      wethOutput = balancerSwap(
-        balancerAddress,
-        tokenAddress,
-        wethAddress,
-        tokenAmount
-      );
+    uint256 reservePayback;
+    uint256 reserveTrade;
+
+    address tokenPayback;
+    address tokenTrade;
+
+    if (amount0 != 0) {
+      (reserveTrade, reservePayback, ) = uniswapPair.getReserves();
+      tokenPayback = uniswapPair.token1();
+      tokenTrade = uniswapPair.token0();
+      amountTrade = amount0;
     } else {
-      // WETH -> TOKEN
-      uint256 tokenAmount = balancerSwap(
-        balancerAddress,
-        wethAddress,
-        tokenAddress,
-        ethInput
-      );
-      // TOKEN -> WETH
-      wethOutput = uniswapSwap(
-        address(this),
-        tokenAddress,
-        wethAddress,
-        tokenAmount
-      );
+      (reservePayback, reserveTrade, ) = uniswapPair.getReserves();
+      tokenPayback = uniswapPair.token0();
+      tokenTrade = uniswapPair.token1();
+      amountTrade = amount1;
     }
 
-    // WETH -> ETH
-    IWeth(wethAddress).withdraw(wethOutput);
-
-    require(reserve == ethAddress, "Unknown reserve");
-    require(payable(aaveAddress).send(ethInput + fee), "Payback failed");
-  }
-
-  function uniswapSwap(
-    address me,
-    address sourceToken,
-    address targetToken,
-    uint256 sourceAmount
-  ) internal returns (uint256) {
-    address[] memory path = new address[](2);
-    (path[0], path[1]) = (sourceToken, targetToken);
-    require(
-      IERC20(sourceToken).approve(uniswapAddress, sourceAmount),
-      "Uniswap weth allowance failed"
+    amountPayback = calculateUniswapPayback(
+      amountTrade,
+      reservePayback,
+      reserveTrade
     );
-    uint256 targetAmount = IUniswap(uniswapAddress).swapExactTokensForTokens(
-      sourceAmount,
-      0,
-      path,
-      me,
-      block.timestamp
-    )[1];
-    return targetAmount;
-  }
 
-  function balancerSwap(
-    address balancer,
-    address sourceToken,
-    address targetToken,
-    uint256 sourceAmount
-  ) internal returns (uint256) {
-    require(
-      IERC20(sourceToken).approve(balancer, sourceAmount),
-      "Balancer token allowance failed"
-    );
-    (uint256 targetOutput, ) = IBalancer(balancer).swapExactAmountIn(
-      sourceToken,
-      sourceAmount,
-      targetToken,
-      0,
+    IERC20(tokenTrade).approve(balancerPoolAddress, amountTrade);
+
+    (uint256 balancerAmountOut, ) = balancerPool.swapExactAmountIn(
+      tokenTrade,
+      amountTrade,
+      tokenPayback,
+      amountPayback,
       uint256(-1)
     );
-    return targetOutput;
+
+    require(
+      IERC20(tokenPayback).transfer(msg.sender, amountPayback),
+      "Payback failed"
+    );
+
+    require(
+      IERC20(tokenPayback).transfer(ownerAddress, balancerAmountOut - amountPayback),
+      "Sender transfer failed"
+    );
+  }
+
+  function calculateUniswapPayback(
+    uint256 amountOut,
+    uint256 reserveIn,
+    uint256 reserveOut
+  ) internal pure returns (uint256) {
+    uint256 numerator = reserveIn * amountOut * 1000;
+    uint256 denominator = reserveOut * 997;
+    return numerator / denominator + 1;
   }
 }

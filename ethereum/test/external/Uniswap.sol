@@ -1,71 +1,98 @@
 //SPDX-License-Identifier: GPL-3.0-only
-pragma solidity 0.7.2;
+pragma solidity 0.7.4;
 
 import "./IERC20.sol";
 import "../../contracts/external/IUniswap.sol";
 
-contract Uniswap is IUniswap {
-  address linkAddress;
-  address wethAddress;
+contract Uniswap is IUniswapPair {
+  address token0address;
+  address token1address;
 
-  constructor(address _linkAddress, address _wethAddress) {
-    linkAddress = _linkAddress;
-    wethAddress = _wethAddress;
+  constructor(address _token0, address _token1) {
+    token0address = _token0;
+    token1address = _token1;
   }
 
-  function getAmountsOut(uint256 amountIn, address[] memory path)
+  function token0() external view override returns (address) {
+    return token0address;
+  }
+
+  function token1() external view override returns (address) {
+    return token1address;
+  }
+
+  function getReserves()
     external
+    view
     override
-    view
-    returns (uint256[] memory)
-  {
-    return getAmountsOutInternal(amountIn, path);
-  }
-
-  function swapExactTokensForTokens(
-    uint256 amountIn,
-    uint256 amountOutMin,
-    address[] calldata path,
-    address to,
-    uint256 deadline
-  ) external override returns (uint256[] memory) {
-    require(amountOutMin == 0, "Unsupported amountOutMin");
-    require(deadline == block.timestamp, "Unsupported deadline");
-
-    address me = address(this);
-    uint256[] memory amounts = getAmountsOutInternal(amountIn, path);
-
-    require(
-      IERC20(path[0]).transferFrom(msg.sender, me, amountIn),
-      "Transfer in failed"
-    );
-
-    require(IERC20(path[1]).approve(me, amounts[1]), "Approval failed");
-
-    require(
-      IERC20(path[1]).transferFrom(me, to, amounts[1]),
-      "Transfer out failed"
-    );
-
-    return amounts;
-  }
-
-  function getAmountsOutInternal(uint256 amountIn, address[] memory path)
-    internal
-    view
-    returns (uint256[] memory)
+    returns (
+      uint112,
+      uint112,
+      uint32
+    )
   {
     address me = address(this);
+    return (
+      uint112(IERC20(token0address).balanceOf(me)),
+      uint112(IERC20(token1address).balanceOf(me)),
+      0
+    );
+  }
 
-    uint256[] memory amounts = new uint256[](2);
+  function swap(
+    uint256 amount0,
+    uint256 amount1,
+    address receiver,
+    bytes calldata payload
+  ) external override {
+    require(payload.length != 0, "Unsupported payload");
+    require(
+      (amount0 == 0 && amount1 != 0) || (amount0 != 0 && amount1 == 0),
+      "Unsupported amounts"
+    );
 
-    uint256 amountOut = 10**18;
-    amountOut *= (amountIn * IERC20(path[1]).balanceOf(me));
-    amountOut /= IERC20(path[0]).balanceOf(me);
+    IERC20 tokenLent;
+    IERC20 tokenPayback;
+    uint256 amountLent;
 
-    amounts[0] = amountIn;
-    amounts[1] = amountOut / 10**18;
+    if (amount0 != 0) {
+      tokenLent = IERC20(token0address);
+      tokenPayback = IERC20(token1address);
+      amountLent = amount0;
+      require(IERC20(token0address).transfer(receiver, amount0), "loan failed");
+    } else {
+      tokenLent = IERC20(token1address);
+      tokenPayback = IERC20(token0address);
+      amountLent = amount1;
+      require(IERC20(token1address).transfer(receiver, amount1), "loan failed");
+    }
 
-    return amounts;
+    address me = address(this);
+    uint256 tokenLentBalance = tokenLent.balanceOf(me);
+    uint256 tokenPaybackBalance = tokenPayback.balanceOf(me);
+
+    IUniswapPairCallee(msg.sender).uniswapV2Call(
+      msg.sender,
+      amount0,
+      amount1,
+      payload
+    );
+
+    require(tokenLent.balanceOf(me) == tokenLentBalance, "unsupported payback");
+
+    uint256 tokenPaybackBalanceAfter = tokenPayback.balanceOf(me);
+    require(tokenPaybackBalanceAfter > tokenPaybackBalance, "missing payback");
+
+    uint256 amountPaidBack = tokenPaybackBalanceAfter - tokenPaybackBalance;
+    uint256 balance0Adjusted = tokenPaybackBalanceAfter *
+      1000 -
+      amountPaidBack *
+      3;
+    uint256 balance1Adjusted = tokenLentBalance;
+    require(
+      balance0Adjusted * balance1Adjusted >=
+        (tokenLentBalance + amountLent) * tokenPaybackBalance * 1000,
+      "payback mismatch"
+    );
   }
 }
