@@ -1,5 +1,6 @@
 require("@nomiclabs/hardhat-truffle5");
 require("@nomiclabs/hardhat-web3");
+require("hardhat-gas-reporter");
 
 module.exports = {
   solidity: {
@@ -9,5 +10,11 @@ module.exports = {
         enabled: true,
       },
     },
+  },
+
+  gasReporter: {
+    currency: 'BRL',
+    gasPrice: 50,
+    ethPrice: 2500,
   },
 };
