@@ -7,6 +7,8 @@ import "../../contracts/external/IUniswap.sol";
 contract Uniswap is IUniswapPair {
   address token0address;
   address token1address;
+  uint112 reserve0;
+  uint112 reserve1;
 
   constructor(address _token0, address _token1) {
     token0address = _token0;
@@ -31,12 +33,13 @@ contract Uniswap is IUniswapPair {
       uint32
     )
   {
+    return (reserve0, reserve1, 0);
+  }
+
+  function refreshReserves() external {
     address me = address(this);
-    return (
-      uint112(IERC20(token0address).balanceOf(me)),
-      uint112(IERC20(token1address).balanceOf(me)),
-      0
-    );
+    reserve0 = uint112(IERC20(token0address).balanceOf(me));
+    reserve1 = uint112(IERC20(token1address).balanceOf(me));
   }
 
   function swap(
@@ -77,6 +80,9 @@ contract Uniswap is IUniswapPair {
       amount1,
       payload
     );
+
+    reserve0 -= uint112(amount0);
+    reserve1 -= uint112(amount1);
 
     require(tokenLent.balanceOf(me) == tokenLentBalance, "unsupported payback");
 

@@ -26,7 +26,10 @@ contract Arbrito is IUniswapPairCallee {
     uint256 amount1,
     bytes calldata data
   ) external override {
-    (address balancerPoolAddress, address ownerAddress) = abi.decode(data, (address, address));
+    (address balancerPoolAddress, address ownerAddress) = abi.decode(
+      data,
+      (address, address)
+    );
     IBalancerPool balancerPool = IBalancerPool(balancerPoolAddress);
     IUniswapPair uniswapPair = IUniswapPair(msg.sender);
 
@@ -73,7 +76,10 @@ contract Arbrito is IUniswapPairCallee {
     );
 
     require(
-      IERC20(tokenPayback).transfer(ownerAddress, balancerAmountOut - amountPayback),
+      IERC20(tokenPayback).transfer(
+        ownerAddress,
+        balancerAmountOut - amountPayback
+      ),
       "Sender transfer failed"
     );
   }
@@ -84,7 +90,7 @@ contract Arbrito is IUniswapPairCallee {
     uint256 reserveOut
   ) internal pure returns (uint256) {
     uint256 numerator = reserveIn * amountOut * 1000;
-    uint256 denominator = reserveOut * 997;
+    uint256 denominator = (reserveOut - amountOut) * 997;
     return numerator / denominator + 1;
   }
 }
