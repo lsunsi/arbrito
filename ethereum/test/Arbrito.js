@@ -29,6 +29,8 @@ contract("Arbrito", ([owner]) => {
 
     await token0.mint(uniswap.address, web3.utils.toWei("10", "ether"));
     await token1.mint(uniswap.address, web3.utils.toWei("10", "ether"));
+    await uniswap.refreshReserves();
+
     await token0.mint(balancer.address, web3.utils.toWei("10", "ether"));
     await token1.mint(balancer.address, web3.utils.toWei("30", "ether"));
 
@@ -76,6 +78,8 @@ contract("Arbrito", ([owner]) => {
 
     await token0.mint(uniswap.address, web3.utils.toWei("10", "ether"));
     await token1.mint(uniswap.address, web3.utils.toWei("10", "ether"));
+    await uniswap.refreshReserves();
+
     await token0.mint(balancer.address, web3.utils.toWei("30", "ether"));
     await token1.mint(balancer.address, web3.utils.toWei("10", "ether"));
 
@@ -123,6 +127,8 @@ contract("Arbrito", ([owner]) => {
 
     await token0.mint(uniswap.address, web3.utils.toWei("10", "ether"));
     await token1.mint(uniswap.address, web3.utils.toWei("10", "ether"));
+    await uniswap.refreshReserves();
+
     await token0.mint(balancer.address, web3.utils.toWei("30", "ether"));
     await token1.mint(balancer.address, web3.utils.toWei("10", "ether"));
 
