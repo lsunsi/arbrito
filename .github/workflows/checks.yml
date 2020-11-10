@@ -41,5 +41,7 @@ jobs:
           path: ~/.npm
       - name: Install
         run: npm install
+      # - name: Lock
+      #   run: bash -c "[[ -z $(git status --short --porcelain) ]] || exit(1)"
       - name: Test
         run: npm test
