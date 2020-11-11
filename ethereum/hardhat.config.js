@@ -13,8 +13,17 @@ module.exports = {
   },
 
   gasReporter: {
-    currency: 'BRL',
+    currency: "BRL",
     gasPrice: 50,
     ethPrice: 2500,
   },
+
+  // networks: {
+  //   hardhat: {
+  //     forking: {
+  //       url: "http://127.0.0.1:8545",
+  //       blockNumber: 11238167,
+  //     },
+  //   },
+  // },
 };
