@@ -1,9 +1,10 @@
 const { expect } = require("hardhat");
 
 const Arbrito = artifacts.require("Arbrito");
-const ERC20Mintable = artifacts.require("ERC20Mintable");
 const Uniswap = artifacts.require("Uniswap");
 const Balancer = artifacts.require("Balancer");
+const ERC20Mintable = artifacts.require("ERC20Mintable");
+const ERC20 = artifacts.require("ERC20");
 
 const deployContracts = async () => {
   const token0 = await ERC20Mintable.new();
@@ -146,4 +147,26 @@ contract("Arbrito", ([owner]) => {
 
     expect(error).match(/Insufficient amount out/);
   });
+
+  // it("mainets", async () => {
+  //   const [arbrito] = await deployContracts();
+
+  //   const aave = await ERC20.at("0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9");
+  //   const weth = await ERC20.at("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2");
+
+  //   await arbrito.perform(
+  //     false,
+  //     web3.utils.toWei("6", "ether"),
+  //     "0xdfc14d2af169b0d36c4eff567ada9b2e0cae044f",
+  //     "0x7c90a3cd7ec80dd2f633ed562480abbeed3be546"
+  //   );
+
+  //   expect((await aave.balanceOf(arbrito.address)).toString()).equal("0");
+  //   expect((await weth.balanceOf(arbrito.address)).toString()).equal("0");
+
+  //   expect((await aave.balanceOf(owner)).toString()).equal(
+  //     web3.utils.toWei("0.092600543527636767", "ether")
+  //   );
+  //   expect((await weth.balanceOf(owner)).toString()).equal("0");
+  // });
 });
