@@ -1,5 +1,6 @@
 require("@nomiclabs/hardhat-truffle5");
 require("@nomiclabs/hardhat-web3");
+require("@nomiclabs/hardhat-etherscan");
 require("hardhat-gas-reporter");
 require("hardhat-deploy");
 
@@ -16,7 +17,7 @@ module.exports = {
     mainnet: {
       url: "http://127.0.0.1:8545",
       accounts: {
-        mnemonic: process.env["ARBRITO_MNEMONIC"] || '',
+        mnemonic: process.env["ARBRITO_MNEMONIC"] || "",
         initialIndex: 0,
         count: 1,
       },
@@ -37,5 +38,8 @@ module.exports = {
     currency: "BRL",
     gasPrice: 50,
     ethPrice: 2500,
+  },
+  etherscan: {
+    apiKey: process.env["ETHERSCAN_API_KEY"],
   },
 };
