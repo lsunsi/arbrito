@@ -3,8 +3,11 @@ use std::path::{Path, PathBuf};
 fn main() {
     std::fs::create_dir_all(Path::new("./src/gen")).unwrap();
 
-    for abi in std::fs::read_dir("./abis").unwrap() {
-        let entry = abi.unwrap();
+    for entry in std::fs::read_dir("./abis")
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+    {
         let contract_name = entry
             .path()
             .file_stem()

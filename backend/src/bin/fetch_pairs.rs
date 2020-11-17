@@ -8,7 +8,7 @@ use web3::types::H160;
 const UNISWAP_URL: &str = "https://api.thegraph.com/subgraphs/name/ianlapham/uniswapv2";
 const BALANCER_URL: &str = "https://api.thegraph.com/subgraphs/name/balancer-labs/balancer-beta";
 
-const UNISWAP_MIN_ETH_RESERVE: u64 = 100_000;
+const UNISWAP_MIN_ETH_RESERVE: u64 = 100_00;
 const BALANCER_MIN_LIQUIDITY: u64 = 100_000;
 const BALANCER_MAX_SWAP_FEE: f64 = 0.01;
 
@@ -129,15 +129,12 @@ fn build_pairs(uniswap_pairs: Vec<(H160, Token, Token)>, balancer_pools: Vec<Vec
 
     for ((uniswap, token0, token1), balancers) in uniswap_pairs.into_iter().zip(balancer_pools) {
         for balancer in balancers {
-            pairs.push(
-                Pair::new(
-                    token0.address.clone(),
-                    token1.address.clone(),
-                    balancer.clone(),
-                    uniswap.clone(),
-                )
-                .expect("pair creating failed"),
-            );
+            pairs.push(Pair {
+                token0: token0.address.clone(),
+                token1: token1.address.clone(),
+                balancer: balancer.clone(),
+                uniswap: uniswap.clone(),
+            });
         }
 
         tokens.push(token0);
