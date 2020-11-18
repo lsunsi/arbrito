@@ -25,28 +25,6 @@ pub struct Pairs {
     pub pairs: Vec<Pair>,
 }
 
-impl Pair {
-    pub fn new(token0: H160, token1: H160, balancer: H160, uniswap: H160) -> Option<Pair> {
-        if token1 < token0 {
-            Some(Pair {
-                balancer,
-                uniswap,
-                token0: token1,
-                token1: token0,
-            })
-        } else if token0 < token1 {
-            Some(Pair {
-                balancer,
-                uniswap,
-                token0,
-                token1,
-            })
-        } else {
-            None
-        }
-    }
-}
-
 impl Pairs {
     pub fn read() -> Result<Self, Box<dyn Error>> {
         let bytes = std::fs::read(FILE_PATH)?;

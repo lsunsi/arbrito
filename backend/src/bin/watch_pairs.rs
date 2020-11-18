@@ -1,6 +1,9 @@
 use colored::{ColoredString, Colorize};
+use ethcontract::{
+    transaction::TransactionResult, Account, BlockNumber, GasPrice, Password, TransactionCondition,
+};
 use pooller::{
-    gen::{Balancer, Uniswap},
+    gen::{Arbrito, Balancer, Uniswap},
     Pairs, Token,
 };
 use std::{collections::HashMap, str::FromStr};
@@ -13,6 +16,8 @@ use web3::{
 
 const UNISWAP_ADDRESS: &str = "7a250d5630B4cF539739dF2C5dAcb4c659F2488D";
 const WETH_ADDRESS: &str = "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
+const ARBRITO_ADDRESS: &str = "0F46f317c62655cA349a666d3A6b7b99e447fCB7";
+const EXECUTOR_ADDRESS: &str = "Af43007aD675D6C72E96905cf4d8acB58ba0E041";
 const WEB3_ENDPOINT: &str = "ws://127.0.0.1:8546";
 
 fn format_amount(token: &Token, amount: U256) -> String {
@@ -47,6 +52,7 @@ enum ArbritageResult {
 }
 
 struct ArbritageAttempt<'a> {
+    pair: &'a ArbritagePair<'a>,
     tokens: (&'a Token, &'a Token),
     result: ArbritageResult,
     amount: U256,
@@ -54,6 +60,7 @@ struct ArbritageAttempt<'a> {
 
 struct ArbritagePair<'a> {
     uniswap: &'a Uniswap,
+    uniswap_pair: H160,
     balancer: Balancer,
     token0: &'a Token,
     token1: &'a Token,
@@ -149,6 +156,7 @@ impl<'a> ArbritagePair<'a> {
         }
 
         ArbritageAttempt {
+            pair: self,
             tokens: (source, target),
             amount,
             result,
@@ -163,6 +171,36 @@ impl<'a> ArbritagePair<'a> {
     }
 }
 
+async fn execute<'a>(
+    attempt: &ArbritageAttempt<'a>,
+    arbrito: &Arbrito,
+    block_number: u64,
+    from_address: H160,
+    nonce: U256,
+) -> TransactionResult {
+    let direction = attempt.pair.token0.address == attempt.tokens.0.address;
+
+    arbrito
+        .perform(
+            direction,
+            attempt.amount,
+            attempt.pair.uniswap_pair,
+            attempt.pair.balancer.address(),
+        )
+        .from(Account::Locked(
+            from_address,
+            Password::new(std::env::var("ARBRITO_EXEC_PASSWORD").unwrap()),
+            Some(TransactionCondition::Block(block_number)),
+        ))
+        .confirmations(1)
+        .gas(U256::from(250_000))
+        .gas_price(GasPrice::Scaled(1.5))
+        .nonce(nonce)
+        .send()
+        .await
+        .unwrap()
+}
+
 #[tokio::main]
 async fn main() {
     let web3 = Web3::new(WebSocket::new(WEB3_ENDPOINT).await.expect("ws failed"));
@@ -175,6 +213,12 @@ async fn main() {
     let tokens: HashMap<_, _> = tokens.into_iter().map(|t| (t.address, t)).collect();
     let weth = tokens.get(&weth_address).expect("where's my weth, boy?");
 
+    let arbrito_address = H160::from_str(ARBRITO_ADDRESS).expect("failed parsing arbrito address");
+    let arbrito = Arbrito::at(&web3, arbrito_address);
+
+    let executor_address =
+        H160::from_str(EXECUTOR_ADDRESS).expect("failed parsing executor address");
+
     let arbritage_pairs: Vec<_> = pairs
         .into_iter()
         .map(|pair| ArbritagePair {
@@ -182,6 +226,7 @@ async fn main() {
             token1: tokens.get(&pair.token1).expect("unknown token"),
             balancer: Balancer::at(&web3, pair.balancer),
             uniswap: &uniswap,
+            uniswap_pair: pair.uniswap,
             weth: &weth,
         })
         .collect();
@@ -191,10 +236,12 @@ async fn main() {
         .await
         .expect("failed subscribing to new heads")
         .for_each(|head| async {
-            match head.ok().and_then(|h| h.number) {
-                Some(number) => println!("\n#{}", number),
+            let block_number = match head.ok().and_then(|h| h.number) {
+                Some(number) => number,
                 None => return (),
             };
+
+            println!("\n#{}", block_number);
 
             let t = std::time::Instant::now();
 
@@ -203,15 +250,15 @@ async fn main() {
             attempts.sort_unstable_by(|a1, a2| a2.result.cmp(&a1.result));
 
             let mut deficit_count = 0;
-            for attempt in attempts {
+            for attempt in &attempts {
                 match attempt.result {
                     ArbritageResult::Deficit => deficit_count += 1,
                     ArbritageResult::Profit(weth_amount, target_amount) => {
-                        let (token0, token1) = attempt.tokens;
+                        let (token_from, token_to) = attempt.tokens;
                         println!(
                             " {0: <30} <-> {1: <30} ~> {2: <30}",
-                            format_amount(token0, attempt.amount),
-                            format_amount(token1, target_amount),
+                            format_amount(token_from, attempt.amount),
+                            format_amount(token_to, target_amount),
                             color_eth_output(weth_amount, format_amount(weth, weth_amount))
                         );
                     }
@@ -220,6 +267,34 @@ async fn main() {
 
             println!("omitting {} deficits", deficit_count);
             println!("took {:.2} seconds", t.elapsed().as_secs_f64());
+
+            if let Some(attempt) = attempts.first() {
+                if let ArbritageResult::Profit(weth_amount, _) = attempt.result {
+                    if weth_amount >= U256::from_str("38d7ea4c680000").unwrap() {
+                        let nonce = web3
+                            .eth()
+                            .transaction_count(
+                                executor_address,
+                                Some(BlockNumber::Number(block_number)),
+                            )
+                            .await
+                            .expect("failed fetching nonce");
+
+                        let tx_result = execute(
+                            attempt,
+                            &arbrito,
+                            block_number.as_u64(),
+                            executor_address,
+                            nonce,
+                        )
+                        .await;
+
+                        println!("{:?}", tx_result);
+
+                        std::process::exit(0);
+                    }
+                }
+            }
 
             ()
         })
