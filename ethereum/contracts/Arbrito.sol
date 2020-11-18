@@ -12,9 +12,7 @@ contract Arbrito is IUniswapPairCallee {
     address uniswapPair,
     address balancerPool
   ) external {
-    (uint256 amount0, uint256 amount1) = direction
-      ? (amount, uint256(0))
-      : (uint256(0), amount);
+    (uint256 amount0, uint256 amount1) = direction ? (amount, uint256(0)) : (uint256(0), amount);
 
     bytes memory payload = abi.encode(balancerPool, msg.sender);
     IUniswapPair(uniswapPair).swap(amount0, amount1, address(this), payload);
@@ -26,10 +24,7 @@ contract Arbrito is IUniswapPairCallee {
     uint256 amount1,
     bytes calldata data
   ) external override {
-    (address balancerPoolAddress, address ownerAddress) = abi.decode(
-      data,
-      (address, address)
-    );
+    (address balancerPoolAddress, address ownerAddress) = abi.decode(data, (address, address));
     IBalancerPool balancerPool = IBalancerPool(balancerPoolAddress);
     IUniswapPair uniswapPair = IUniswapPair(msg.sender);
 
@@ -54,32 +49,23 @@ contract Arbrito is IUniswapPairCallee {
       amountTrade = amount1;
     }
 
-    amountPayback = calculateUniswapPayback(
-      amountTrade,
-      reservePayback,
-      reserveTrade
-    );
+    amountPayback = calculateUniswapPayback(amountTrade, reservePayback, reserveTrade);
 
     IERC20(tokenTrade).approve(balancerPoolAddress, amountTrade);
 
-    (uint256 balancerAmountOut, ) = balancerPool.swapExactAmountIn(
-      tokenTrade,
-      amountTrade,
-      tokenPayback,
-      amountPayback,
-      uint256(-1)
-    );
+    (uint256 balancerAmountOut, ) =
+      balancerPool.swapExactAmountIn(
+        tokenTrade,
+        amountTrade,
+        tokenPayback,
+        amountPayback,
+        uint256(-1)
+      );
+
+    require(IERC20(tokenPayback).transfer(msg.sender, amountPayback), "Payback failed");
 
     require(
-      IERC20(tokenPayback).transfer(msg.sender, amountPayback),
-      "Payback failed"
-    );
-
-    require(
-      IERC20(tokenPayback).transfer(
-        ownerAddress,
-        balancerAmountOut - amountPayback
-      ),
+      IERC20(tokenPayback).transfer(ownerAddress, balancerAmountOut - amountPayback),
       "Sender transfer failed"
     );
   }
