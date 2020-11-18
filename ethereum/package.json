@@ -2,7 +2,8 @@
   "name": "arbrito-contract",
   "version": "1.0.0",
   "scripts": {
-    "test": "hardhat test"
+    "test": "hardhat test",
+    "format-check": "prettier -l \"contracts/**/*.sol\" \"deploy/**/*.js\" \"test/**/*.js\""
   },
   "devDependencies": {
     "@nomiclabs/hardhat-etherscan": "^2.0.1",
@@ -12,7 +13,7 @@
     "hardhat-deploy": "^0.7.0-beta.28",
     "hardhat-gas-reporter": "^1.0.1",
     "prettier": "^2.1.2",
-    "prettier-plugin-solidity": "^1.0.0-alpha.59",
+    "prettier-plugin-solidity": "^1.0.0-alpha.60",
     "web3": "^1.3.0"
   }
 }

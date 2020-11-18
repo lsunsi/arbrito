@@ -23,6 +23,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ./backend/target
+      - name: Format
+        run: rustfmt --check build.rs src/**/*.rs
       - name: Check
         run: cargo check --release
 
@@ -46,5 +48,7 @@ jobs:
         run: npm install
       - name: Lock
         run: bash -c '[[ -z $(git status --short --porcelain) ]] || exit 1'
+      - name: Format
+        run: npm run format-check
       - name: Test
         run: npm test

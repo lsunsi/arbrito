@@ -20,13 +20,7 @@ const deployContracts = async () => {
 
 contract("Arbrito", ([owner]) => {
   it("works from token0 to token1", async () => {
-    const [
-      arbrito,
-      uniswap,
-      balancer,
-      token0,
-      token1,
-    ] = await deployContracts();
+    const [arbrito, uniswap, balancer, token0, token1] = await deployContracts();
 
     await token0.mint(uniswap.address, web3.utils.toWei("10", "ether"));
     await token1.mint(uniswap.address, web3.utils.toWei("10", "ether"));
@@ -35,19 +29,12 @@ contract("Arbrito", ([owner]) => {
     await token0.mint(balancer.address, web3.utils.toWei("10", "ether"));
     await token1.mint(balancer.address, web3.utils.toWei("30", "ether"));
 
-    await arbrito.perform(
-      true,
-      web3.utils.toWei("1", "ether"),
-      uniswap.address,
-      balancer.address
-    );
+    await arbrito.perform(true, web3.utils.toWei("1", "ether"), uniswap.address, balancer.address);
 
     expect((await token0.balanceOf(uniswap.address)).toString()).equal(
       web3.utils.toWei("9", "ether")
     );
-    expect((await token1.balanceOf(uniswap.address)).toString()).equal(
-      "11114454474534715257"
-    );
+    expect((await token1.balanceOf(uniswap.address)).toString()).equal("11114454474534715257");
 
     expect((await token0.balanceOf(balancer.address)).toString()).equal(
       web3.utils.toWei("11", "ether")
@@ -69,13 +56,7 @@ contract("Arbrito", ([owner]) => {
   });
 
   it("works from token1 to token0", async () => {
-    const [
-      arbrito,
-      uniswap,
-      balancer,
-      token0,
-      token1,
-    ] = await deployContracts();
+    const [arbrito, uniswap, balancer, token0, token1] = await deployContracts();
 
     await token0.mint(uniswap.address, web3.utils.toWei("10", "ether"));
     await token1.mint(uniswap.address, web3.utils.toWei("10", "ether"));
@@ -84,19 +65,12 @@ contract("Arbrito", ([owner]) => {
     await token0.mint(balancer.address, web3.utils.toWei("30", "ether"));
     await token1.mint(balancer.address, web3.utils.toWei("10", "ether"));
 
-    await arbrito.perform(
-      false,
-      web3.utils.toWei("1", "ether"),
-      uniswap.address,
-      balancer.address
-    );
+    await arbrito.perform(false, web3.utils.toWei("1", "ether"), uniswap.address, balancer.address);
 
     expect((await token1.balanceOf(uniswap.address)).toString()).equal(
       web3.utils.toWei("9", "ether")
     );
-    expect((await token0.balanceOf(uniswap.address)).toString()).equal(
-      "11114454474534715257"
-    );
+    expect((await token0.balanceOf(uniswap.address)).toString()).equal("11114454474534715257");
 
     expect((await token1.balanceOf(balancer.address)).toString()).equal(
       web3.utils.toWei("11", "ether")
@@ -118,13 +92,7 @@ contract("Arbrito", ([owner]) => {
   });
 
   it("reverts if it had enough", async () => {
-    const [
-      arbrito,
-      uniswap,
-      balancer,
-      token0,
-      token1,
-    ] = await deployContracts();
+    const [arbrito, uniswap, balancer, token0, token1] = await deployContracts();
 
     await token0.mint(uniswap.address, web3.utils.toWei("10", "ether"));
     await token1.mint(uniswap.address, web3.utils.toWei("10", "ether"));
