@@ -23,6 +23,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ./backend/target
+      - name: Format
+        run: rustfmt --check build.rs src/**/*.rs
       - name: Check
         run: cargo check --release
 
