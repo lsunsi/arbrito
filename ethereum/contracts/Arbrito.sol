@@ -1,5 +1,5 @@
 //SPDX-License-Identifier: GPL-3.0-only
-pragma solidity 0.7.4;
+pragma solidity 0.7.5;
 
 import "./external/IBalancer.sol";
 import "./external/IUniswap.sol";
@@ -10,8 +10,10 @@ contract Arbrito is IUniswapPairCallee {
     bool direction,
     uint256 amount,
     address uniswapPair,
-    address balancerPool
+    address balancerPool,
+    uint256 blockNumber
   ) external {
+    require(block.number == blockNumber, "Delayed execution");
     (uint256 amount0, uint256 amount1) = direction ? (amount, uint256(0)) : (uint256(0), amount);
 
     bytes memory payload = abi.encode(balancerPool, msg.sender);

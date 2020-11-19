@@ -1,5 +1,5 @@
 //SPDX-License-Identifier: GPL-3.0-only
-pragma solidity 0.7.4;
+pragma solidity 0.7.5;
 
 import "./IERC20.sol";
 import "../../contracts/external/IUniswap.sol";
@@ -74,12 +74,7 @@ contract Uniswap is IUniswapPair {
     uint256 tokenLentBalance = tokenLent.balanceOf(me);
     uint256 tokenPaybackBalance = tokenPayback.balanceOf(me);
 
-    IUniswapPairCallee(msg.sender).uniswapV2Call(
-      msg.sender,
-      amount0,
-      amount1,
-      payload
-    );
+    IUniswapPairCallee(msg.sender).uniswapV2Call(msg.sender, amount0, amount1, payload);
 
     reserve0 -= uint112(amount0);
     reserve1 -= uint112(amount1);
@@ -90,10 +85,7 @@ contract Uniswap is IUniswapPair {
     require(tokenPaybackBalanceAfter > tokenPaybackBalance, "missing payback");
 
     uint256 amountPaidBack = tokenPaybackBalanceAfter - tokenPaybackBalance;
-    uint256 balance0Adjusted = tokenPaybackBalanceAfter *
-      1000 -
-      amountPaidBack *
-      3;
+    uint256 balance0Adjusted = tokenPaybackBalanceAfter * 1000 - amountPaidBack * 3;
     uint256 balance1Adjusted = tokenLentBalance;
     require(
       balance0Adjusted * balance1Adjusted >=

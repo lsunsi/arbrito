@@ -1,5 +1,5 @@
 //SPDX-License-Identifier: GPL-3.0-only
-pragma solidity 0.7.4;
+pragma solidity 0.7.5;
 
 interface IERC20 {
   function transferFrom(
@@ -12,10 +12,7 @@ interface IERC20 {
 
   function balanceOf(address account) external view returns (uint256);
 
-  function allowance(address owner, address spender)
-    external
-    view
-    returns (uint256);
+  function allowance(address owner, address spender) external view returns (uint256);
 
   function approve(address spender, uint256 amount) external returns (bool);
 }
@@ -28,11 +25,7 @@ contract ERC20 is IERC20 {
     return balances[account];
   }
 
-  function transfer(address recipient, uint256 amount)
-    external
-    override
-    returns (bool)
-  {
+  function transfer(address recipient, uint256 amount) external override returns (bool) {
     if (balances[msg.sender] < amount) {
       return false;
     }
@@ -59,20 +52,11 @@ contract ERC20 is IERC20 {
     return true;
   }
 
-  function allowance(address owner, address spender)
-    external
-    view
-    override
-    returns (uint256)
-  {
+  function allowance(address owner, address spender) external view override returns (uint256) {
     return allowances[owner][spender];
   }
 
-  function approve(address spender, uint256 amount)
-    external
-    override
-    returns (bool)
-  {
+  function approve(address spender, uint256 amount) external override returns (bool) {
     allowances[msg.sender][spender] = amount;
     return true;
   }
