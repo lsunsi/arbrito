@@ -1,5 +1,5 @@
 //SPDX-License-Identifier: GPL-3.0-only
-pragma solidity 0.7.4;
+pragma solidity 0.7.5;
 
 import "./IERC20.sol";
 import "../../contracts/external/IBalancer.sol";
@@ -23,15 +23,9 @@ contract Balancer is IBalancerPool {
 
     require(tokenAmountOut > _minAmountOut, "Insufficient amount out");
 
-    require(
-      tokenIn.transferFrom(msg.sender, me, _tokenAmountIn),
-      "Transfer in failed"
-    );
+    require(tokenIn.transferFrom(msg.sender, me, _tokenAmountIn), "Transfer in failed");
 
-    require(
-      tokenOut.transfer(msg.sender, tokenAmountOut),
-      "Transfer out failed"
-    );
+    require(tokenOut.transfer(msg.sender, tokenAmountOut), "Transfer out failed");
 
     return (tokenAmountOut, 0);
   }
