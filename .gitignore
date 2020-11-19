@@ -3,5 +3,6 @@ artifacts/
 cache/
 target/
 gen/
+dist/
 
 pairs.toml

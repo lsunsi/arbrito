@@ -50,5 +50,7 @@ jobs:
         run: bash -c '[[ -z $(git status --short --porcelain) ]] || exit 1'
       - name: Format
         run: npm run format-check
+      - name: Type check
+        run: npx typescript
       - name: Test
         run: npm test
