@@ -6,8 +6,10 @@ import "./external/IUniswap.sol";
 import "./external/IERC20.sol";
 
 contract Arbrito is IUniswapPairCallee {
+  enum Borrow { Token0, Token1 }
+
   function perform(
-    bool direction,
+    Borrow borrow,
     uint256 amount,
     address uniswapPair,
     address balancerPool,
@@ -16,14 +18,18 @@ contract Arbrito is IUniswapPairCallee {
     uint256 uniswapReserve1
   ) external {
     require(block.number == blockNumber, "Delayed execution");
-    (uint256 amount0, uint256 amount1) = direction ? (amount, uint256(0)) : (uint256(0), amount);
 
     (uint256 reserve0, uint256 reserve1, ) = IUniswapPair(uniswapPair).getReserves();
     require(reserve0 == uniswapReserve0, "Reserve0 mismatch");
     require(reserve1 == uniswapReserve1, "Reserve1 mismatch");
 
     bytes memory payload = abi.encode(balancerPool, msg.sender, reserve0, reserve1);
-    IUniswapPair(uniswapPair).swap(amount0, amount1, address(this), payload);
+
+    if (borrow == Borrow.Token0) {
+      IUniswapPair(uniswapPair).swap(amount, 0, address(this), payload);
+    } else {
+      IUniswapPair(uniswapPair).swap(0, amount, address(this), payload);
+    }
   }
 
   function uniswapV2Call(

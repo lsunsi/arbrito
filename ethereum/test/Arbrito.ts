@@ -34,7 +34,7 @@ contract("Arbrito", ([owner]) => {
     await token1.mint(balancer.address, web3.utils.toWei("30", "ether"));
 
     await arbrito.perform(
-      true,
+      0,
       web3.utils.toWei("1", "ether"),
       uniswap.address,
       balancer.address,
@@ -81,7 +81,7 @@ contract("Arbrito", ([owner]) => {
     await token1.mint(balancer.address, web3.utils.toWei("10", "ether"));
 
     await arbrito.perform(
-      false,
+      1,
       web3.utils.toWei("1", "ether"),
       uniswap.address,
       balancer.address,
@@ -130,7 +130,7 @@ contract("Arbrito", ([owner]) => {
     let error;
     try {
       await arbrito.perform(
-        true,
+        0,
         web3.utils.toWei("1", "ether"),
         uniswap.address,
         balancer.address,
@@ -151,7 +151,7 @@ contract("Arbrito", ([owner]) => {
     let error;
     try {
       await arbrito.perform(
-        false,
+        1,
         web3.utils.toWei("6", "ether"),
         "0xdfc14d2af169b0d36c4eff567ada9b2e0cae044f",
         "0x7c90a3cd7ec80dd2f633ed562480abbeed3be546",
@@ -172,7 +172,7 @@ contract("Arbrito", ([owner]) => {
 
     try {
       await arbrito.perform(
-        false,
+        1,
         web3.utils.toWei("6", "ether"),
         uniswap.address,
         balancer.address,
@@ -187,7 +187,7 @@ contract("Arbrito", ([owner]) => {
 
     try {
       await arbrito.perform(
-        false,
+        1,
         web3.utils.toWei("6", "ether"),
         uniswap.address,
         balancer.address,
@@ -210,7 +210,7 @@ contract("Arbrito", ([owner]) => {
     const weth = await ERC20.at("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2");
 
     await arbrito.perform(
-      false,
+      1,
       web3.utils.toWei("6", "ether"),
       "0xdfc14d2af169b0d36c4eff567ada9b2e0cae044f",
       "0x7c90a3cd7ec80dd2f633ed562480abbeed3be546",
