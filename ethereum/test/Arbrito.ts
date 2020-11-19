@@ -1,4 +1,5 @@
-const { expect } = require("hardhat");
+import { expect, contract, artifacts, web3 } from "hardhat";
+import { it } from "mocha";
 
 const Arbrito = artifacts.require("Arbrito");
 const Uniswap = artifacts.require("Uniswap");

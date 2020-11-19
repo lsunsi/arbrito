@@ -1,10 +1,11 @@
-require("@nomiclabs/hardhat-truffle5");
-require("@nomiclabs/hardhat-web3");
-require("@nomiclabs/hardhat-etherscan");
-require("hardhat-gas-reporter");
-require("hardhat-deploy");
+import "@nomiclabs/hardhat-truffle5";
+import "@nomiclabs/hardhat-web3";
+import "@nomiclabs/hardhat-etherscan";
+import "hardhat-gas-reporter";
+import "hardhat-deploy";
+import { HardhatUserConfig } from "hardhat/config";
 
-module.exports = {
+const config: HardhatUserConfig = {
   solidity: {
     version: "0.7.4",
     settings: {
@@ -36,10 +37,12 @@ module.exports = {
   },
   gasReporter: {
     currency: "BRL",
-    gasPrice: 50,
-    ethPrice: 2500,
+    gasPrice: 100,
+    coinmarketcap: process.env["COINMARKETCAP_API_KEY"] || "",
   },
   etherscan: {
     apiKey: process.env["ETHERSCAN_API_KEY"],
   },
 };
+
+export default config;
