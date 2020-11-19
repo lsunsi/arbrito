@@ -15,14 +15,6 @@ contract Uniswap is IUniswapPair {
     token1address = _token1;
   }
 
-  function token0() external view override returns (address) {
-    return token0address;
-  }
-
-  function token1() external view override returns (address) {
-    return token1address;
-  }
-
   function getReserves()
     external
     view
