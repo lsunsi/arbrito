@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "test": "hardhat test",
-    "format-check": "prettier -l \"contracts/**/*.sol\" \"deploy/**/*.ts\" \"test/**/*.ts\""
+    "format-check": "prettier -l \"contracts/**/*.sol\" \"deploy/**/*.ts\" \"test/**/*.(ts|sol)\""
   },
   "devDependencies": {
     "@nomiclabs/hardhat-etherscan": "^2.0.1",
