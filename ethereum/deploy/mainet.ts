@@ -1,4 +1,4 @@
-module.exports = async ({ deployments: { deploy }, getNamedAccounts }) => {
+export default async ({ deployments: { deploy }, getNamedAccounts }) => {
   const { deployer } = await getNamedAccounts();
 
   await deploy("Arbrito", {
