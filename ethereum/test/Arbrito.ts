@@ -33,14 +33,16 @@ contract("Arbrito", ([owner]) => {
     await token0.mint(balancer.address, web3.utils.toWei("10", "ether"));
     await token1.mint(balancer.address, web3.utils.toWei("30", "ether"));
 
-    await arbrito.perform(
-      true,
+    const tx = await arbrito.perform(
+      0,
       web3.utils.toWei("1", "ether"),
       uniswap.address,
       balancer.address,
-      (await web3.eth.getBlockNumber()) + 1,
+      token0.address,
+      token1.address,
       uniswapReserve0,
-      uniswapReserve1
+      uniswapReserve1,
+      (await web3.eth.getBlockNumber()) + 1
     );
 
     expect((await token0.balanceOf(uniswap.address)).toString()).equal(
@@ -81,13 +83,15 @@ contract("Arbrito", ([owner]) => {
     await token1.mint(balancer.address, web3.utils.toWei("10", "ether"));
 
     await arbrito.perform(
-      false,
+      1,
       web3.utils.toWei("1", "ether"),
       uniswap.address,
       balancer.address,
-      (await web3.eth.getBlockNumber()) + 1,
+      token0.address,
+      token1.address,
       uniswapReserve0,
-      uniswapReserve1
+      uniswapReserve1,
+      (await web3.eth.getBlockNumber()) + 1
     );
 
     expect((await token1.balanceOf(uniswap.address)).toString()).equal(
@@ -130,13 +134,15 @@ contract("Arbrito", ([owner]) => {
     let error;
     try {
       await arbrito.perform(
-        true,
+        0,
         web3.utils.toWei("1", "ether"),
         uniswap.address,
         balancer.address,
-        (await web3.eth.getBlockNumber()) + 1,
+        token0.address,
+        token1.address,
         uniswapReserve0,
-        uniswapReserve1
+        uniswapReserve1,
+        (await web3.eth.getBlockNumber()) + 1
       );
     } catch (e) {
       error = e;
@@ -146,18 +152,20 @@ contract("Arbrito", ([owner]) => {
   });
 
   it("reverts when the block is mined in delayed block", async () => {
-    const [arbrito] = await deployContracts();
+    const [arbrito, uniswap, balancer, token0, token1] = await deployContracts();
 
     let error;
     try {
       await arbrito.perform(
-        false,
+        1,
         web3.utils.toWei("6", "ether"),
-        "0xdfc14d2af169b0d36c4eff567ada9b2e0cae044f",
-        "0x7c90a3cd7ec80dd2f633ed562480abbeed3be546",
-        await web3.eth.getBlockNumber(),
+        uniswap.address,
+        balancer.address,
+        token0.address,
+        token1.address,
         0,
-        0
+        0,
+        await web3.eth.getBlockNumber()
       );
     } catch (e) {
       error = e;
@@ -167,18 +175,20 @@ contract("Arbrito", ([owner]) => {
   });
 
   it("reverts if the uniswap reserves are different from expected", async () => {
-    const [arbrito, uniswap, balancer] = await deployContracts();
+    const [arbrito, uniswap, balancer, token0, token1] = await deployContracts();
     let count = 0;
 
     try {
       await arbrito.perform(
-        false,
+        1,
         web3.utils.toWei("6", "ether"),
         uniswap.address,
         balancer.address,
-        (await web3.eth.getBlockNumber()) + 1,
+        token0.address,
+        token1.address,
         1,
-        0
+        0,
+        (await web3.eth.getBlockNumber()) + 1
       );
     } catch (e) {
       expect(e).match(/Reserve0 mismatch/);
@@ -187,13 +197,15 @@ contract("Arbrito", ([owner]) => {
 
     try {
       await arbrito.perform(
-        false,
+        1,
         web3.utils.toWei("6", "ether"),
         uniswap.address,
         balancer.address,
-        (await web3.eth.getBlockNumber()) + 1,
+        token0.address,
+        token1.address,
         0,
-        1
+        1,
+        (await web3.eth.getBlockNumber()) + 1
       );
     } catch (e) {
       expect(e).match(/Reserve1 mismatch/);
@@ -210,10 +222,12 @@ contract("Arbrito", ([owner]) => {
     const weth = await ERC20.at("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2");
 
     await arbrito.perform(
-      false,
+      1,
       web3.utils.toWei("6", "ether"),
       "0xdfc14d2af169b0d36c4eff567ada9b2e0cae044f",
       "0x7c90a3cd7ec80dd2f633ed562480abbeed3be546",
+      "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9",
+      "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
       (await web3.eth.getBlockNumber()) + 1
     );
 

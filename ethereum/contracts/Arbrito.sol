@@ -6,24 +6,40 @@ import "./external/IUniswap.sol";
 import "./external/IERC20.sol";
 
 contract Arbrito is IUniswapPairCallee {
+  enum Borrow { Token0, Token1 }
+
   function perform(
-    bool direction,
+    Borrow borrow,
     uint256 amount,
     address uniswapPair,
     address balancerPool,
-    uint256 blockNumber,
+    address uniswapToken0,
+    address uniswapToken1,
     uint256 uniswapReserve0,
-    uint256 uniswapReserve1
+    uint256 uniswapReserve1,
+    uint256 blockNumber
   ) external {
     require(block.number == blockNumber, "Delayed execution");
-    (uint256 amount0, uint256 amount1) = direction ? (amount, uint256(0)) : (uint256(0), amount);
 
     (uint256 reserve0, uint256 reserve1, ) = IUniswapPair(uniswapPair).getReserves();
     require(reserve0 == uniswapReserve0, "Reserve0 mismatch");
     require(reserve1 == uniswapReserve1, "Reserve1 mismatch");
 
-    bytes memory payload = abi.encode(balancerPool, msg.sender, reserve0, reserve1);
-    IUniswapPair(uniswapPair).swap(amount0, amount1, address(this), payload);
+    bytes memory payload =
+      abi.encode(
+        balancerPool,
+        msg.sender,
+        uniswapToken0,
+        uniswapToken1,
+        uniswapReserve0,
+        uniswapReserve1
+      );
+
+    if (borrow == Borrow.Token0) {
+      IUniswapPair(uniswapPair).swap(amount, 0, address(this), payload);
+    } else {
+      IUniswapPair(uniswapPair).swap(0, amount, address(this), payload);
+    }
   }
 
   function uniswapV2Call(
@@ -32,33 +48,30 @@ contract Arbrito is IUniswapPairCallee {
     uint256 amount1,
     bytes calldata data
   ) external override {
-    (address balancerPoolAddress, address ownerAddress, uint256 reserve0, uint256 reserve1) =
-      abi.decode(data, (address, address, uint256, uint256));
-
-    IUniswapPair uniswapPair = IUniswapPair(msg.sender);
+    (
+      address balancerPoolAddress,
+      address ownerAddress,
+      address token0,
+      address token1,
+      uint256 reserve0,
+      uint256 reserve1
+    ) = abi.decode(data, (address, address, address, address, uint256, uint256));
 
     uint256 amountTrade;
     uint256 amountPayback;
-
-    uint256 reservePayback;
-    uint256 reserveTrade;
 
     address tokenPayback;
     address tokenTrade;
 
     if (amount0 != 0) {
-      (reserveTrade, reservePayback) = (reserve0, reserve1);
-      tokenPayback = uniswapPair.token1();
-      tokenTrade = uniswapPair.token0();
       amountTrade = amount0;
+      (tokenTrade, tokenPayback) = (token0, token1);
+      amountPayback = calculateUniswapPayback(amountTrade, reserve1, reserve0);
     } else {
-      (reservePayback, reserveTrade) = (reserve0, reserve1);
-      tokenPayback = uniswapPair.token0();
-      tokenTrade = uniswapPair.token1();
       amountTrade = amount1;
+      (tokenPayback, tokenTrade) = (token0, token1);
+      amountPayback = calculateUniswapPayback(amountTrade, reserve0, reserve1);
     }
-
-    amountPayback = calculateUniswapPayback(amountTrade, reservePayback, reserveTrade);
 
     IERC20(tokenTrade).approve(balancerPoolAddress, amountTrade);
 
