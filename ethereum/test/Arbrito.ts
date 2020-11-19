@@ -23,8 +23,11 @@ contract("Arbrito", ([owner]) => {
   it("works from token0 to token1", async () => {
     const [arbrito, uniswap, balancer, token0, token1] = await deployContracts();
 
-    await token0.mint(uniswap.address, web3.utils.toWei("10", "ether"));
-    await token1.mint(uniswap.address, web3.utils.toWei("10", "ether"));
+    const uniswapReserve0 = web3.utils.toWei("10", "ether");
+    const uniswapReserve1 = web3.utils.toWei("10", "ether");
+
+    await token0.mint(uniswap.address, uniswapReserve0);
+    await token1.mint(uniswap.address, uniswapReserve1);
     await uniswap.refreshReserves();
 
     await token0.mint(balancer.address, web3.utils.toWei("10", "ether"));
@@ -35,7 +38,9 @@ contract("Arbrito", ([owner]) => {
       web3.utils.toWei("1", "ether"),
       uniswap.address,
       balancer.address,
-      (await web3.eth.getBlockNumber()) + 1
+      (await web3.eth.getBlockNumber()) + 1,
+      uniswapReserve0,
+      uniswapReserve1
     );
 
     expect((await token0.balanceOf(uniswap.address)).toString()).equal(
@@ -65,8 +70,11 @@ contract("Arbrito", ([owner]) => {
   it("works from token1 to token0", async () => {
     const [arbrito, uniswap, balancer, token0, token1] = await deployContracts();
 
-    await token0.mint(uniswap.address, web3.utils.toWei("10", "ether"));
-    await token1.mint(uniswap.address, web3.utils.toWei("10", "ether"));
+    const uniswapReserve0 = web3.utils.toWei("10", "ether");
+    const uniswapReserve1 = web3.utils.toWei("10", "ether");
+
+    await token0.mint(uniswap.address, uniswapReserve0);
+    await token1.mint(uniswap.address, uniswapReserve1);
     await uniswap.refreshReserves();
 
     await token0.mint(balancer.address, web3.utils.toWei("30", "ether"));
@@ -77,7 +85,9 @@ contract("Arbrito", ([owner]) => {
       web3.utils.toWei("1", "ether"),
       uniswap.address,
       balancer.address,
-      (await web3.eth.getBlockNumber()) + 1
+      (await web3.eth.getBlockNumber()) + 1,
+      uniswapReserve0,
+      uniswapReserve1
     );
 
     expect((await token1.balanceOf(uniswap.address)).toString()).equal(
@@ -107,8 +117,11 @@ contract("Arbrito", ([owner]) => {
   it("reverts if it had enough", async () => {
     const [arbrito, uniswap, balancer, token0, token1] = await deployContracts();
 
-    await token0.mint(uniswap.address, web3.utils.toWei("10", "ether"));
-    await token1.mint(uniswap.address, web3.utils.toWei("10", "ether"));
+    const uniswapReserve0 = web3.utils.toWei("10", "ether");
+    const uniswapReserve1 = web3.utils.toWei("10", "ether");
+
+    await token0.mint(uniswap.address, uniswapReserve0);
+    await token1.mint(uniswap.address, uniswapReserve1);
     await uniswap.refreshReserves();
 
     await token0.mint(balancer.address, web3.utils.toWei("30", "ether"));
@@ -121,7 +134,9 @@ contract("Arbrito", ([owner]) => {
         web3.utils.toWei("1", "ether"),
         uniswap.address,
         balancer.address,
-        (await web3.eth.getBlockNumber()) + 1
+        (await web3.eth.getBlockNumber()) + 1,
+        uniswapReserve0,
+        uniswapReserve1
       );
     } catch (e) {
       error = e;
@@ -140,13 +155,52 @@ contract("Arbrito", ([owner]) => {
         web3.utils.toWei("6", "ether"),
         "0xdfc14d2af169b0d36c4eff567ada9b2e0cae044f",
         "0x7c90a3cd7ec80dd2f633ed562480abbeed3be546",
-        await web3.eth.getBlockNumber()
+        await web3.eth.getBlockNumber(),
+        0,
+        0
       );
     } catch (e) {
       error = e;
     }
 
     expect(error).match(/Delayed execution/);
+  });
+
+  it("reverts if the uniswap reserves are different from expected", async () => {
+    const [arbrito, uniswap, balancer] = await deployContracts();
+    let count = 0;
+
+    try {
+      await arbrito.perform(
+        false,
+        web3.utils.toWei("6", "ether"),
+        uniswap.address,
+        balancer.address,
+        (await web3.eth.getBlockNumber()) + 1,
+        1,
+        0
+      );
+    } catch (e) {
+      expect(e).match(/Reserve0 mismatch/);
+      count += 1;
+    }
+
+    try {
+      await arbrito.perform(
+        false,
+        web3.utils.toWei("6", "ether"),
+        uniswap.address,
+        balancer.address,
+        (await web3.eth.getBlockNumber()) + 1,
+        0,
+        1
+      );
+    } catch (e) {
+      expect(e).match(/Reserve1 mismatch/);
+      count += 1;
+    }
+
+    expect(count).eq(2);
   });
 
   xit("mainets", async () => {
