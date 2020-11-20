@@ -9,8 +9,8 @@ const deploy: DeployFunction = async ({
 
   await deploy("Arbrito", {
     from: deployer,
-    gasLimit: 600000,
-    gasPrice: "12000000000",
+    gasLimit: 1_000_000,
+    gasPrice: "0x4a817c800", // 20gwei
     log: true,
     args: [],
   });
