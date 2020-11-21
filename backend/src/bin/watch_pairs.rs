@@ -3,7 +3,7 @@ use ethcontract::{
     transaction::TransactionResult, Account, BlockNumber, GasPrice, Password, TransactionCondition,
 };
 use pooller::{
-    gen::{Arbrito, Balancer, Uniswap},
+    gen::{Arbrito, Balancer, Uniswap, UniswapPair},
     Pairs, Token,
 };
 use std::{collections::HashMap, str::FromStr};
@@ -16,7 +16,7 @@ use web3::{
 
 const UNISWAP_ADDRESS: &str = "7a250d5630B4cF539739dF2C5dAcb4c659F2488D";
 const WETH_ADDRESS: &str = "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
-const ARBRITO_ADDRESS: &str = "0F46f317c62655cA349a666d3A6b7b99e447fCB7";
+const ARBRITO_ADDRESS: &str = "e96B6680a8ef1D8d561171948226bc3A133fA56D";
 const EXECUTOR_ADDRESS: &str = "Af43007aD675D6C72E96905cf4d8acB58ba0E041";
 const WEB3_ENDPOINT: &str = "ws://127.0.0.1:8546";
 
@@ -59,8 +59,8 @@ struct ArbritageAttempt<'a> {
 }
 
 struct ArbritagePair<'a> {
-    uniswap: &'a Uniswap,
-    uniswap_pair: H160,
+    uniswap_router: &'a Uniswap,
+    uniswap_pair: UniswapPair,
     balancer: Balancer,
     token0: &'a Token,
     token1: &'a Token,
@@ -70,7 +70,7 @@ struct ArbritagePair<'a> {
 impl<'a> ArbritagePair<'a> {
     async fn run(&self, source: &Token, target: &Token, amount: U256) -> ArbritageResult {
         let uniswap_amount = self
-            .uniswap
+            .uniswap_router
             .get_amounts_in(amount, vec![target.address, source.address])
             .call()
             .await
@@ -118,7 +118,7 @@ impl<'a> ArbritagePair<'a> {
         } else {
             let target_profit = balancer_amount - uniswap_amount;
             let weth_profit = self
-                .uniswap
+                .uniswap_router
                 .get_amounts_out(
                     balancer_amount - uniswap_amount,
                     vec![target.address, self.weth.address],
@@ -135,7 +135,7 @@ impl<'a> ArbritagePair<'a> {
         let one = if source.address == self.weth.address {
             U256::exp10(18)
         } else {
-            self.uniswap
+            self.uniswap_router
                 .get_amounts_out(U256::exp10(18), vec![self.weth.address, source.address])
                 .call()
                 .await
@@ -178,14 +178,31 @@ async fn execute<'a>(
     from_address: H160,
     nonce: U256,
 ) -> TransactionResult {
-    let direction = attempt.pair.token0.address == attempt.tokens.0.address;
+    let borrow = if attempt.pair.token0.address == attempt.tokens.0.address {
+        0
+    } else {
+        1
+    };
+
+    let (reserve0, reserve1, _) = attempt
+        .pair
+        .uniswap_pair
+        .get_reserves()
+        .call()
+        .await
+        .expect("failed getting reserves");
 
     arbrito
         .perform(
-            direction,
+            borrow,
             attempt.amount,
-            attempt.pair.uniswap_pair,
+            attempt.pair.uniswap_pair.address(),
             attempt.pair.balancer.address(),
+            attempt.pair.token0.address,
+            attempt.pair.token1.address,
+            U256::from(reserve0),
+            U256::from(reserve1),
+            U256::from(block_number + 1),
         )
         .from(Account::Locked(
             from_address,
@@ -193,7 +210,7 @@ async fn execute<'a>(
             Some(TransactionCondition::Block(block_number)),
         ))
         .confirmations(1)
-        .gas(U256::from(250_000))
+        .gas(U256::from(500_000))
         .gas_price(GasPrice::Scaled(1.5))
         .nonce(nonce)
         .send()
@@ -225,8 +242,8 @@ async fn main() {
             token0: tokens.get(&pair.token0).expect("unknown token"),
             token1: tokens.get(&pair.token1).expect("unknown token"),
             balancer: Balancer::at(&web3, pair.balancer),
-            uniswap: &uniswap,
-            uniswap_pair: pair.uniswap,
+            uniswap_pair: UniswapPair::at(&web3, pair.uniswap),
+            uniswap_router: &uniswap,
             weth: &weth,
         })
         .collect();
@@ -270,7 +287,7 @@ async fn main() {
 
             if let Some(attempt) = attempts.first() {
                 if let ArbritageResult::Profit(weth_amount, _) = attempt.result {
-                    if weth_amount >= U256::from_str("38d7ea4c680000").unwrap() {
+                    if weth_amount >= U256::from_str("6a94d74f430000").unwrap() {
                         let nonce = web3
                             .eth()
                             .transaction_count(
