@@ -19,6 +19,8 @@ const WETH_ADDRESS: &str = "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
 const ARBRITO_ADDRESS: &str = "e96B6680a8ef1D8d561171948226bc3A133fA56D";
 const EXECUTOR_ADDRESS: &str = "Af43007aD675D6C72E96905cf4d8acB58ba0E041";
 const WEB3_ENDPOINT: &str = "ws://127.0.0.1:8546";
+const GAS_USAGE: u128 = 400_000;
+const GAS_SCALE: u8 = 2;
 
 fn format_amount(token: &Token, amount: U256) -> String {
     let d = U256::exp10(token.decimals as usize);
@@ -176,6 +178,8 @@ async fn execute<'a>(
     arbrito: &Arbrito,
     block_number: u64,
     from_address: H160,
+    gas_usage: U256,
+    gas_price: U256,
     nonce: U256,
 ) -> TransactionResult {
     let borrow = if attempt.pair.token0.address == attempt.tokens.0.address {
@@ -209,9 +213,9 @@ async fn execute<'a>(
             Password::new(std::env::var("ARBRITO_EXEC_PASSWORD").unwrap()),
             Some(TransactionCondition::Block(block_number)),
         ))
+        .gas(gas_usage)
+        .gas_price(GasPrice::Value(gas_price))
         .confirmations(1)
-        .gas(U256::from(500_000))
-        .gas_price(GasPrice::Scaled(1.5))
         .nonce(nonce)
         .send()
         .await
@@ -235,6 +239,8 @@ async fn main() {
 
     let executor_address =
         H160::from_str(EXECUTOR_ADDRESS).expect("failed parsing executor address");
+
+    let gas_usage = U256::from(GAS_USAGE);
 
     let arbritage_pairs: Vec<_> = pairs
         .into_iter()
@@ -260,6 +266,15 @@ async fn main() {
 
             println!("\n#{}", block_number);
 
+            let gas_price = web3
+                .eth()
+                .gas_price()
+                .await
+                .expect("failed getting gas price")
+                * GAS_SCALE;
+
+            let cost = gas_price * gas_usage;
+
             let t = std::time::Instant::now();
 
             let attempt_futs = arbritage_pairs.iter().map(ArbritagePair::attempts);
@@ -282,12 +297,17 @@ async fn main() {
                 }
             }
 
+            println!(
+                "cost {} @ {} gwei",
+                format_amount(&weth, cost),
+                gas_price / U256::exp10(9)
+            );
             println!("omitting {} deficits", deficit_count);
             println!("took {:.2} seconds", t.elapsed().as_secs_f64());
 
             if let Some(attempt) = attempts.first() {
                 if let ArbritageResult::Profit(weth_amount, _) = attempt.result {
-                    if weth_amount >= U256::from_str("6a94d74f430000").unwrap() {
+                    if weth_amount >= cost {
                         let nonce = web3
                             .eth()
                             .transaction_count(
@@ -302,6 +322,8 @@ async fn main() {
                             &arbrito,
                             block_number.as_u64(),
                             executor_address,
+                            gas_usage,
+                            gas_price,
                             nonce,
                         )
                         .await;
