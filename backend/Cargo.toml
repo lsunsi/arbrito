@@ -16,7 +16,7 @@ colored = "2.0.0"
 
 [dependencies.tokio]
 version = "0.2.22"
-features = ["macros"]
+features = ["macros", "sync"]
 
 [dependencies.serde]
 version = "1.0.117"
