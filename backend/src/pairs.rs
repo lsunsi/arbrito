@@ -4,7 +4,7 @@ use web3::types::H160;
 
 const FILE_PATH: &str = "pairs.toml";
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Token {
     pub address: H160,
     pub symbol: String,

@@ -1,12 +1,11 @@
 use colored::{ColoredString, Colorize};
-use ethcontract::{
-    transaction::TransactionResult, Account, BlockNumber, GasPrice, Password, TransactionCondition,
-};
+use ethcontract::{Account, BlockNumber, GasPrice, Password, TransactionCondition};
 use pooller::{
     gen::{Arbrito, Balancer, Uniswap, UniswapPair},
     Pairs, Token,
 };
-use std::{collections::HashMap, str::FromStr};
+use std::{collections::HashMap, str::FromStr, sync::Arc};
+use tokio::sync::{Mutex, OwnedMutexGuard};
 use web3::{
     futures::{future::join_all, StreamExt},
     transports::WebSocket,
@@ -53,23 +52,24 @@ enum ArbritageResult {
     Profit(U256, U256),
 }
 
-struct ArbritageAttempt<'a> {
-    pair: &'a ArbritagePair<'a>,
-    tokens: (&'a Token, &'a Token),
+struct ArbritageAttempt {
+    pair: ArbritagePair,
+    tokens: (Token, Token),
     result: ArbritageResult,
     amount: U256,
 }
 
-struct ArbritagePair<'a> {
-    uniswap_router: &'a Uniswap,
+#[derive(Clone)]
+struct ArbritagePair {
+    uniswap_router: Uniswap,
     uniswap_pair: UniswapPair,
     balancer: Balancer,
-    token0: &'a Token,
-    token1: &'a Token,
-    weth: &'a Token,
+    token0: Token,
+    token1: Token,
+    weth: Token,
 }
 
-impl<'a> ArbritagePair<'a> {
+impl ArbritagePair {
     async fn run(&self, source: &Token, target: &Token, amount: U256) -> ArbritageResult {
         let uniswap_amount = self
             .uniswap_router
@@ -133,7 +133,7 @@ impl<'a> ArbritagePair<'a> {
         }
     }
 
-    async fn attempt(&'a self, source: &'a Token, target: &'a Token) -> ArbritageAttempt<'a> {
+    async fn attempt(&self, source: Token, target: Token) -> ArbritageAttempt {
         let one = if source.address == self.weth.address {
             U256::exp10(18)
         } else {
@@ -145,11 +145,11 @@ impl<'a> ArbritagePair<'a> {
         };
 
         let mut amount = one;
-        let mut result = self.run(source, target, amount).await;
+        let mut result = self.run(&source, &target, amount).await;
 
         for i in 2..=10 {
             let amount2 = one * i;
-            let result2 = self.run(source, target, amount2).await;
+            let result2 = self.run(&source, &target, amount2).await;
 
             if result < result2 {
                 amount = amount2;
@@ -158,30 +158,31 @@ impl<'a> ArbritagePair<'a> {
         }
 
         ArbritageAttempt {
-            pair: self,
+            pair: self.clone(),
             tokens: (source, target),
             amount,
             result,
         }
     }
 
-    async fn attempts(&'a self) -> Vec<ArbritageAttempt<'a>> {
+    async fn attempts(&self) -> Vec<ArbritageAttempt> {
         vec![
-            self.attempt(&self.token0, &self.token1).await,
-            self.attempt(&self.token1, &self.token0).await,
+            self.attempt(self.token0.clone(), self.token1.clone()).await,
+            self.attempt(self.token1.clone(), self.token0.clone()).await,
         ]
     }
 }
 
-async fn execute<'a>(
-    attempt: &ArbritageAttempt<'a>,
-    arbrito: &Arbrito,
+async fn execute(
+    _: OwnedMutexGuard<()>,
+    attempt: ArbritageAttempt,
+    arbrito: Arbrito,
     block_number: u64,
     from_address: H160,
     gas_usage: U256,
     gas_price: U256,
     nonce: U256,
-) -> TransactionResult {
+) {
     let borrow = if attempt.pair.token0.address == attempt.tokens.0.address {
         0
     } else {
@@ -196,7 +197,7 @@ async fn execute<'a>(
         .await
         .expect("failed getting reserves");
 
-    arbrito
+    let tx = arbrito
         .perform(
             borrow,
             attempt.amount,
@@ -218,8 +219,16 @@ async fn execute<'a>(
         .confirmations(1)
         .nonce(nonce)
         .send()
-        .await
-        .unwrap()
+        .await;
+
+    match tx {
+        Ok(tx) => println!(
+            "{} {:?}",
+            "HUGE SUCCESS!".bright_green().bold().italic().underline(),
+            tx.hash()
+        ),
+        Err(_) => println!("minor failure"),
+    }
 }
 
 #[tokio::main]
@@ -242,15 +251,17 @@ async fn main() {
 
     let gas_usage = U256::from(GAS_USAGE);
 
+    let execution_lock = Arc::new(Mutex::new(()));
+
     let arbritage_pairs: Vec<_> = pairs
         .into_iter()
         .map(|pair| ArbritagePair {
-            token0: tokens.get(&pair.token0).expect("unknown token"),
-            token1: tokens.get(&pair.token1).expect("unknown token"),
+            token0: tokens.get(&pair.token0).expect("unknown token").clone(),
+            token1: tokens.get(&pair.token1).expect("unknown token").clone(),
             balancer: Balancer::at(&web3, pair.balancer),
             uniswap_pair: UniswapPair::at(&web3, pair.uniswap),
-            uniswap_router: &uniswap,
-            weth: &weth,
+            uniswap_router: uniswap.clone(),
+            weth: weth.clone(),
         })
         .collect();
 
@@ -265,6 +276,14 @@ async fn main() {
             };
 
             println!("\n#{}", block_number);
+
+            let guard = match execution_lock.clone().try_lock_owned() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    println!("waiting");
+                    return ();
+                }
+            };
 
             let gas_price = web3
                 .eth()
@@ -286,7 +305,7 @@ async fn main() {
                 match attempt.result {
                     ArbritageResult::Deficit => deficit_count += 1,
                     ArbritageResult::Profit(weth_amount, target_amount) => {
-                        let (token_from, token_to) = attempt.tokens;
+                        let (token_from, token_to) = &attempt.tokens;
                         println!(
                             " {0: <30} <-> {1: <30} ~> {2: <30}",
                             format_amount(token_from, attempt.amount),
@@ -305,7 +324,8 @@ async fn main() {
             println!("omitting {} deficits", deficit_count);
             println!("took {:.2} seconds", t.elapsed().as_secs_f64());
 
-            if let Some(attempt) = attempts.first() {
+            if attempts.len() > 0 {
+                let attempt = attempts.remove(0);
                 if let ArbritageResult::Profit(weth_amount, _) = attempt.result {
                     if weth_amount >= cost {
                         let nonce = web3
@@ -317,20 +337,16 @@ async fn main() {
                             .await
                             .expect("failed fetching nonce");
 
-                        let tx_result = execute(
+                        tokio::spawn(execute(
+                            guard,
                             attempt,
-                            &arbrito,
+                            arbrito.clone(),
                             block_number.as_u64(),
                             executor_address,
                             gas_usage,
                             gas_price,
                             nonce,
-                        )
-                        .await;
-
-                        println!("{:?}", tx_result);
-
-                        std::process::exit(0);
+                        ));
                     }
                 }
             }
