@@ -1,14 +1,16 @@
 use bigdecimal::{BigDecimal, BigDecimal as BigInt, FromPrimitive, ToPrimitive};
+use futures::{Future, TryFutureExt};
 use graphql_client::{GraphQLQuery, Response};
 use pooller::{Pair, Pairs, Token};
 use reqwest::Client;
-use std::str::FromStr;
+use std::{fmt::Debug, str::FromStr, time::Duration};
+use tokio::time::delay_for;
 use web3::types::H160;
 
 const UNISWAP_URL: &str = "https://api.thegraph.com/subgraphs/name/ianlapham/uniswapv2";
 const BALANCER_URL: &str = "https://api.thegraph.com/subgraphs/name/balancer-labs/balancer-beta";
 
-const UNISWAP_MIN_ETH_RESERVE: u64 = 100_00;
+const UNISWAP_MIN_ETH_RESERVE: u64 = 10_000;
 const BALANCER_MIN_LIQUIDITY: u64 = 100_000;
 const BALANCER_MAX_SWAP_FEE: f64 = 0.01;
 
@@ -30,44 +32,61 @@ fn parse_address(addr: String) -> H160 {
     H160::from_str(addr.strip_prefix("0x").expect("missing prefix")).expect("h160 parsing failed")
 }
 
+async fn send<T, E: Debug, Fut: Future<Output = Result<Response<T>, E>>>(
+    func: &dyn Fn() -> Fut,
+) -> T {
+    loop {
+        match func().await {
+            Err(e) => {
+                delay_for(Duration::from_millis(1000)).await;
+                log::warn!("retrying due to network {:?}", e);
+            }
+            Ok(Response { errors, data }) => {
+                if let Some(errors) = errors {
+                    delay_for(Duration::from_millis(1000)).await;
+                    log::warn!("retrying due to application {:?}", errors);
+                } else {
+                    return data.expect("how can error and data both be none?");
+                }
+            }
+        }
+    }
+}
+
 async fn uniswap_pairs(client: &Client, min_reserve_eth: BigDecimal) -> Vec<(H160, Token, Token)> {
     log::info!("uniswap_pairs | started");
     let query = UniswapGetPairs::build_query(uniswap_get_pairs::Variables { min_reserve_eth });
 
-    let response = client.post(UNISWAP_URL).json(&query).send().await;
-    let response = response.expect("uniswap query failed");
-
-    let body: Response<uniswap_get_pairs::ResponseData> =
-        response.json().await.expect("uniswap response failed");
-
-    if let Some(errors) = body.errors {
-        log::error!("uniswap_pairs | query returned errors {:?}", errors);
-        panic!(errors);
-    }
+    let data: uniswap_get_pairs::ResponseData = send(&|| {
+        client
+            .post(UNISWAP_URL)
+            .json(&query)
+            .send()
+            .and_then(|a| a.json())
+    })
+    .await;
 
     let mut pairs = vec![];
     let parse_decimals = |bigdec: BigDecimal| bigdec.to_usize().expect("decimals parsing failed");
 
-    if let Some(data) = body.data {
-        if data.pairs.len() == 1000 {
-            log::warn!("possible pagination limiting");
-        }
+    if data.pairs.len() == 1000 {
+        log::warn!("possible pagination limiting");
+    }
 
-        for pair in data.pairs {
-            pairs.push((
-                parse_address(pair.id),
-                Token {
-                    symbol: pair.token0.symbol,
-                    address: parse_address(pair.token0.id),
-                    decimals: parse_decimals(pair.token0.decimals),
-                },
-                Token {
-                    symbol: pair.token1.symbol,
-                    address: parse_address(pair.token1.id),
-                    decimals: parse_decimals(pair.token1.decimals),
-                },
-            ));
-        }
+    for pair in data.pairs {
+        pairs.push((
+            parse_address(pair.id),
+            Token {
+                symbol: pair.token0.symbol,
+                address: parse_address(pair.token0.id),
+                decimals: parse_decimals(pair.token0.decimals),
+            },
+            Token {
+                symbol: pair.token1.symbol,
+                address: parse_address(pair.token1.id),
+                decimals: parse_decimals(pair.token1.decimals),
+            },
+        ));
     }
 
     log::info!("uniswap_pairs | {} pairs fetched", pairs.len());
@@ -99,28 +118,24 @@ async fn balancer_pools(
             ],
         });
 
-        let response = client.post(BALANCER_URL).json(&query).send().await;
-        let response = response.expect("balancer query failed");
+        let data: balancer_get_pools::ResponseData = send(&|| {
+            client
+                .post(BALANCER_URL)
+                .json(&query)
+                .send()
+                .and_then(|a| a.json())
+        })
+        .await;
 
-        let body: graphql_client::Response<balancer_get_pools::ResponseData> =
-            response.json().await.expect("balancer response failed");
-
-        if let Some(errors) = body.errors {
-            log::error!("balancer_pools | query returned errors {:?}", errors);
-            panic!(errors);
-        }
-
-        if let Some(data) = body.data {
-            pools.push(
-                data.pools
-                    .into_iter()
-                    .map(|p| {
-                        count += 1;
-                        parse_address(p.id)
-                    })
-                    .collect(),
-            );
-        }
+        pools.push(
+            data.pools
+                .into_iter()
+                .map(|p| {
+                    count += 1;
+                    parse_address(p.id)
+                })
+                .collect(),
+        );
     }
 
     log::info!("balancer_pools | {} pools fetched", count);
