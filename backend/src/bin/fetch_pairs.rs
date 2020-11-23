@@ -49,6 +49,10 @@ async fn uniswap_pairs(client: &Client, min_reserve_eth: BigDecimal) -> Vec<(H16
     let parse_decimals = |bigdec: BigDecimal| bigdec.to_usize().expect("decimals parsing failed");
 
     if let Some(data) = body.data {
+        if data.pairs.len() == 1000 {
+            log::warn!("possible pagination limiting");
+        }
+
         for pair in data.pairs {
             pairs.push((
                 parse_address(pair.id),
