@@ -1,14 +1,16 @@
-use colored::{ColoredString, Colorize};
+use colored::Colorize;
 use ethcontract::{Account, BlockNumber, GasPrice, Password, TransactionCondition};
+use futures::FutureExt;
 use pooller::{
     gen::{Arbrito, Balancer, Uniswap, UniswapPair},
     Pairs, Token,
 };
 use std::{collections::HashMap, str::FromStr, sync::Arc};
-use tokio::sync::{Mutex, OwnedMutexGuard};
+use tokio::sync::{mpsc::unbounded_channel, Mutex, OwnedMutexGuard};
 use web3::{
     futures::{future::join_all, StreamExt},
     transports::WebSocket,
+    types::U64,
     types::{H160, U256},
     Web3,
 };
@@ -21,45 +23,64 @@ const WEB3_ENDPOINT: &str = "ws://127.0.0.1:8546";
 const GAS_USAGE: u128 = 400_000;
 const GAS_SCALE: u8 = 2;
 
-fn format_amount(token: &Token, amount: U256) -> String {
-    let d = U256::exp10(token.decimals as usize);
+fn format_colored_eth(amount: U256) -> String {
+    let string = format_eth(amount);
+
+    if amount >= U256::exp10(18) {
+        string.bright_green().bold().italic().underline()
+    } else if amount >= U256::exp10(17) {
+        string.bright_green().bold()
+    } else if amount >= U256::exp10(16) {
+        string.green()
+    } else if amount >= U256::exp10(15) {
+        string.yellow().dimmed()
+    } else {
+        string.dimmed()
+    }
+    .to_string()
+}
+
+fn format_eth(amount: U256) -> String {
+    let decimals = U256::exp10(18);
     format!(
-        "{: <4} {}.{:03$}",
-        token.symbol,
-        (amount / d).as_u128(),
-        (amount % d).as_u128(),
-        token.decimals as usize,
+        "Ξ {}.{:02$}",
+        (amount / decimals).as_u128(),
+        (amount % decimals).as_u128(),
+        18,
     )
 }
 
-fn color_eth_output(amount: U256, str: String) -> ColoredString {
-    if amount >= U256::exp10(18) {
-        str.bright_green().bold().italic().underline()
-    } else if amount >= U256::exp10(17) {
-        str.bright_green().bold()
-    } else if amount >= U256::exp10(16) {
-        str.green()
-    } else if amount >= U256::exp10(15) {
-        str.yellow().dimmed()
-    } else {
-        str.dimmed()
-    }
+fn format_block_number(number: U64) -> String {
+    format!(
+        "{}{}",
+        if number.as_u64() % 2 == 0 {
+            "#".bright_magenta()
+        } else {
+            "#".bright_cyan()
+        },
+        number.to_string().bright_white().dimmed()
+    )
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
 enum ArbritageResult {
     Deficit,
-    Profit(U256, U256),
+    GrossProfit(U256, U256),
+    NetProfit(U256, U256, U256),
 }
 
+#[derive(Debug, Clone)]
 struct ArbritageAttempt {
     pair: ArbritagePair,
     tokens: (Token, Token),
     result: ArbritageResult,
+    block_number: U64,
+    gas_price: U256,
+    gas_usage: U256,
     amount: U256,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ArbritagePair {
     uniswap_router: Uniswap,
     uniswap_pair: UniswapPair,
@@ -70,7 +91,14 @@ struct ArbritagePair {
 }
 
 impl ArbritagePair {
-    async fn run(&self, source: &Token, target: &Token, amount: U256) -> ArbritageResult {
+    async fn run(
+        &self,
+        source: &Token,
+        target: &Token,
+        amount: U256,
+        gas_price: U256,
+        gas_usage: U256,
+    ) -> ArbritageResult {
         let uniswap_amount = self
             .uniswap_router
             .get_amounts_in(amount, vec![target.address, source.address])
@@ -113,27 +141,39 @@ impl ArbritagePair {
             .expect("balancer calc_out_given_in failed");
 
         if balancer_amount < uniswap_amount {
-            ArbritageResult::Deficit
-        } else if target.address == self.weth.address {
-            let profit = balancer_amount - uniswap_amount;
-            ArbritageResult::Profit(profit, profit)
+            return ArbritageResult::Deficit;
+        }
+
+        let target_profit = balancer_amount - uniswap_amount;
+        let weth_profit = if target.address == self.weth.address {
+            target_profit
         } else {
-            let target_profit = balancer_amount - uniswap_amount;
             let weth_profit = self
                 .uniswap_router
-                .get_amounts_out(
-                    balancer_amount - uniswap_amount,
-                    vec![target.address, self.weth.address],
-                )
+                .get_amounts_out(target_profit, vec![target.address, self.weth.address])
                 .call()
                 .await
                 .expect("uniswap get_amounts_out failed")[1];
 
-            ArbritageResult::Profit(weth_profit, target_profit)
+            weth_profit
+        };
+
+        let cost = gas_usage * gas_price;
+        if weth_profit > cost {
+            ArbritageResult::NetProfit(weth_profit - cost, weth_profit, target_profit)
+        } else {
+            ArbritageResult::GrossProfit(weth_profit, target_profit)
         }
     }
 
-    async fn attempt(&self, source: Token, target: Token) -> ArbritageAttempt {
+    async fn attempt(
+        &self,
+        source: Token,
+        target: Token,
+        gas_price: U256,
+        gas_usage: U256,
+        block_number: U64,
+    ) -> ArbritageAttempt {
         let one = if source.address == self.weth.address {
             U256::exp10(18)
         } else {
@@ -145,11 +185,15 @@ impl ArbritagePair {
         };
 
         let mut amount = one;
-        let mut result = self.run(&source, &target, amount).await;
+        let mut result = self
+            .run(&source, &target, amount, gas_price, gas_usage)
+            .await;
 
         for i in 2..=10 {
             let amount2 = one * i;
-            let result2 = self.run(&source, &target, amount2).await;
+            let result2 = self
+                .run(&source, &target, amount2, gas_price, gas_usage)
+                .await;
 
             if result < result2 {
                 amount = amount2;
@@ -160,15 +204,37 @@ impl ArbritagePair {
         ArbritageAttempt {
             pair: self.clone(),
             tokens: (source, target),
+            block_number,
+            gas_price,
+            gas_usage,
             amount,
             result,
         }
     }
 
-    async fn attempts(&self) -> Vec<ArbritageAttempt> {
+    async fn attempts(
+        &self,
+        gas_price: U256,
+        gas_usage: U256,
+        block_number: U64,
+    ) -> Vec<ArbritageAttempt> {
         vec![
-            self.attempt(self.token0.clone(), self.token1.clone()).await,
-            self.attempt(self.token1.clone(), self.token0.clone()).await,
+            self.attempt(
+                self.token0.clone(),
+                self.token1.clone(),
+                gas_price,
+                gas_usage,
+                block_number,
+            )
+            .await,
+            self.attempt(
+                self.token1.clone(),
+                self.token0.clone(),
+                gas_price,
+                gas_usage,
+                block_number,
+            )
+            .await,
         ]
     }
 }
@@ -177,12 +243,47 @@ async fn execute(
     _: OwnedMutexGuard<()>,
     attempt: ArbritageAttempt,
     arbrito: Arbrito,
-    block_number: u64,
     from_address: H160,
-    gas_usage: U256,
-    gas_price: U256,
-    nonce: U256,
+    web3: Web3<WebSocket>,
 ) {
+    match attempt.result {
+        ArbritageResult::NetProfit(weth_net_profit, weth_gross_profit, token_profit) => {
+            log::info!(
+                "{} {} {} -> {} = {} (net = {})",
+                "Executing attempt".bold().underline(),
+                format_block_number(attempt.block_number),
+                attempt.tokens.0.symbol,
+                attempt.tokens.1.symbol,
+                format_colored_eth(weth_gross_profit),
+                format_colored_eth(weth_net_profit),
+            );
+            log::debug!(
+                "Token addresses = {} {}",
+                attempt.tokens.0.address,
+                attempt.tokens.1.address
+            );
+            log::debug!("UniswapPool = {}", attempt.pair.uniswap_pair.address());
+            log::debug!("BalancerPool = {}", attempt.pair.balancer.address());
+            log::debug!("Token profit = {}", token_profit);
+        }
+        _ => {
+            log::error!(
+                "{} Cannot execute non-net-profitable attempt",
+                format_block_number(attempt.block_number)
+            );
+            return;
+        }
+    }
+
+    let nonce = web3
+        .eth()
+        .transaction_count(
+            from_address,
+            Some(BlockNumber::Number(attempt.block_number)),
+        )
+        .await
+        .expect("failed fetching nonce");
+
     let borrow = if attempt.pair.token0.address == attempt.tokens.0.address {
         0
     } else {
@@ -207,32 +308,39 @@ async fn execute(
             attempt.pair.token1.address,
             U256::from(reserve0),
             U256::from(reserve1),
-            U256::from(block_number + 1),
+            U256::from(attempt.block_number.as_u64() + 1),
         )
         .from(Account::Locked(
             from_address,
             Password::new(std::env::var("ARBRITO_EXEC_PASSWORD").unwrap()),
-            Some(TransactionCondition::Block(block_number)),
+            Some(TransactionCondition::Block(attempt.block_number.as_u64())),
         ))
-        .gas(gas_usage)
-        .gas_price(GasPrice::Value(gas_price))
+        .gas(attempt.gas_usage)
+        .gas_price(GasPrice::Value(attempt.gas_price))
         .confirmations(1)
         .nonce(nonce)
         .send()
         .await;
 
     match tx {
-        Ok(tx) => println!(
-            "{} {:?}",
-            "HUGE SUCCESS!".bright_green().bold().italic().underline(),
+        Err(_) => log::info!(
+            "{} {}",
+            format_block_number(attempt.block_number),
+            "Arbitrage execution failed".red().dimmed(),
+        ),
+        Ok(tx) => log::info!(
+            "{} {} Transaction hash {}",
+            format_block_number(attempt.block_number),
+            "Arbitrage execution succeeded!".bright_green().bold(),
             tx.hash()
         ),
-        Err(_) => println!("minor failure"),
     }
 }
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
+
     let web3 = Web3::new(WebSocket::new(WEB3_ENDPOINT).await.expect("ws failed"));
 
     let weth_address = H160::from_str(WETH_ADDRESS).expect("failed parsing weth address");
@@ -250,8 +358,41 @@ async fn main() {
         H160::from_str(EXECUTOR_ADDRESS).expect("failed parsing executor address");
 
     let gas_usage = U256::from(GAS_USAGE);
+    let (tx, mut rx) = unbounded_channel::<ArbritageAttempt>();
 
-    let execution_lock = Arc::new(Mutex::new(()));
+    let executor_web3 = web3.clone();
+    tokio::spawn(async move {
+        let lock = Arc::new(Mutex::new(()));
+        let mut block_number = U64::from(0);
+
+        while let Some(attempt) = rx.recv().await {
+            if attempt.block_number <= block_number {
+                log::warn!(
+                    "{} Dropped profitable attempt",
+                    format_block_number(block_number)
+                );
+                continue;
+            }
+
+            block_number = attempt.block_number;
+
+            match lock.clone().try_lock_owned() {
+                Err(_) => log::info!(
+                    "{} Dropped profitable attempt waiting for previous one",
+                    format_block_number(block_number)
+                ),
+                Ok(guard) => {
+                    tokio::spawn(execute(
+                        guard,
+                        attempt,
+                        arbrito.clone(),
+                        executor_address,
+                        executor_web3.clone(),
+                    ));
+                }
+            };
+        }
+    });
 
     let arbritage_pairs: Vec<_> = pairs
         .into_iter()
@@ -275,15 +416,7 @@ async fn main() {
                 None => return (),
             };
 
-            println!("\n#{}", block_number);
-
-            let guard = match execution_lock.clone().try_lock_owned() {
-                Ok(guard) => guard,
-                Err(_) => {
-                    println!("waiting");
-                    return ();
-                }
-            };
+            log::info!("{} New block header", format_block_number(block_number));
 
             let gas_price = web3
                 .eth()
@@ -292,64 +425,62 @@ async fn main() {
                 .expect("failed getting gas price")
                 * GAS_SCALE;
 
-            let cost = gas_price * gas_usage;
+            log::info!(
+                "{} Max execution cost {} @ {} gwei",
+                format_block_number(block_number),
+                format_eth(gas_price * gas_usage),
+                gas_price / U256::exp10(9)
+            );
 
             let t = std::time::Instant::now();
 
-            let attempt_futs = arbritage_pairs.iter().map(ArbritagePair::attempts);
-            let mut attempts: Vec<_> = join_all(attempt_futs).await.into_iter().flatten().collect();
-            attempts.sort_unstable_by(|a1, a2| a2.result.cmp(&a1.result));
+            let attempt_futs = arbritage_pairs.iter().map(|pair| {
+                pair.attempts(gas_price, gas_usage, block_number)
+                    .map(|attempts| {
+                        for attempt in &attempts {
+                            if let ArbritageResult::NetProfit(_, _, _) = attempt.result {
+                                tx.send(attempt.clone()).expect("where's the executor at?");
+                            }
+                        }
+                        attempts
+                    })
+            });
 
-            let mut deficit_count = 0;
-            for attempt in &attempts {
-                match attempt.result {
-                    ArbritageResult::Deficit => deficit_count += 1,
-                    ArbritageResult::Profit(weth_amount, target_amount) => {
-                        let (token_from, token_to) = &attempt.tokens;
-                        println!(
-                            " {0: <30} <-> {1: <30} ~> {2: <30}",
-                            format_amount(token_from, attempt.amount),
-                            format_amount(token_to, target_amount),
-                            color_eth_output(weth_amount, format_amount(weth, weth_amount))
-                        );
-                    }
+            let attempt = join_all(attempt_futs)
+                .await
+                .into_iter()
+                .flatten()
+                .max_by(|a1, a2| a1.result.cmp(&a2.result))
+                .expect("empty arbritage results");
+
+            match attempt.result {
+                ArbritageResult::Deficit => log::info!("No profit found"),
+                ArbritageResult::GrossProfit(weth_gross_profit, _) => {
+                    log::info!(
+                        "{} Highest profit found: {} -> {} = {}",
+                        format_block_number(block_number),
+                        attempt.tokens.0.symbol,
+                        attempt.tokens.1.symbol,
+                        format_colored_eth(weth_gross_profit),
+                    );
+                }
+                ArbritageResult::NetProfit(weth_net_profit, weth_gross_profit, _) => {
+                    log::info!(
+                        "{} Highest profit found: {} -> {} = {} (net = {})",
+                        format_block_number(block_number),
+                        attempt.tokens.0.symbol,
+                        attempt.tokens.1.symbol,
+                        format_colored_eth(weth_gross_profit),
+                        format_colored_eth(weth_net_profit)
+                    );
                 }
             }
 
-            println!(
-                "cost {} @ {} gwei",
-                format_amount(&weth, cost),
-                gas_price / U256::exp10(9)
+            log::info!(
+                "{} Processed in {:.2} seconds",
+                format_block_number(block_number),
+                t.elapsed().as_secs_f64()
             );
-            println!("omitting {} deficits", deficit_count);
-            println!("took {:.2} seconds", t.elapsed().as_secs_f64());
-
-            if attempts.len() > 0 {
-                let attempt = attempts.remove(0);
-                if let ArbritageResult::Profit(weth_amount, _) = attempt.result {
-                    if weth_amount >= cost {
-                        let nonce = web3
-                            .eth()
-                            .transaction_count(
-                                executor_address,
-                                Some(BlockNumber::Number(block_number)),
-                            )
-                            .await
-                            .expect("failed fetching nonce");
-
-                        tokio::spawn(execute(
-                            guard,
-                            attempt,
-                            arbrito.clone(),
-                            block_number.as_u64(),
-                            executor_address,
-                            gas_usage,
-                            gas_price,
-                            nonce,
-                        ));
-                    }
-                }
-            }
 
             ()
         })
