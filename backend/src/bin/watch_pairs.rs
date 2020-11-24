@@ -257,8 +257,8 @@ async fn execute(
         ArbritageResult::NetProfit(weth_net_profit, weth_gross_profit, token_profit) => {
             log::info!(
                 "{} {} {} -> {} = {} (net = {})",
-                "Executing attempt".bold().underline(),
                 format_block_number(attempt.block_number),
+                "Executing attempt".bold().underline(),
                 attempt.tokens.0.symbol,
                 attempt.tokens.1.symbol,
                 format_colored_eth(weth_gross_profit),
@@ -462,7 +462,9 @@ async fn main() {
                 .expect("empty arbritage results");
 
             match attempt.result {
-                ArbritageResult::Deficit => log::info!("No profit found"),
+                ArbritageResult::Deficit => {
+                    log::info!("{} No profit found", format_block_number(block_number))
+                }
                 ArbritageResult::GrossProfit(weth_gross_profit, _) => {
                     log::info!(
                         "{} Highest profit found: {} -> {} = {}",
