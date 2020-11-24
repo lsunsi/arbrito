@@ -20,7 +20,8 @@ const WETH_ADDRESS: &str = "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
 const ARBRITO_ADDRESS: &str = "e96B6680a8ef1D8d561171948226bc3A133fA56D";
 const EXECUTOR_ADDRESS: &str = "Af43007aD675D6C72E96905cf4d8acB58ba0E041";
 const WEB3_ENDPOINT: &str = "ws://127.0.0.1:8546";
-const GAS_USAGE: u128 = 400_000;
+const EXPECTED_GAS_USAGE: u128 = 350_000;
+const MAX_GAS_USAGE: u128 = 400_000;
 const GAS_SCALE: u8 = 2;
 
 fn format_colored_eth(amount: U256) -> String {
@@ -76,7 +77,8 @@ struct ArbritageAttempt {
     result: ArbritageResult,
     block_number: U64,
     gas_price: U256,
-    gas_usage: U256,
+    expected_gas_usage: U256,
+    max_gas_usage: U256,
     amount: U256,
 }
 
@@ -97,7 +99,7 @@ impl ArbritagePair {
         target: &Token,
         amount: U256,
         gas_price: U256,
-        gas_usage: U256,
+        expected_gas_usage: U256,
     ) -> ArbritageResult {
         let uniswap_amount = self
             .uniswap_router
@@ -158,7 +160,7 @@ impl ArbritagePair {
             weth_profit
         };
 
-        let cost = gas_usage * gas_price;
+        let cost = expected_gas_usage * gas_price;
         if weth_profit > cost {
             ArbritageResult::NetProfit(weth_profit - cost, weth_profit, target_profit)
         } else {
@@ -171,7 +173,8 @@ impl ArbritagePair {
         source: Token,
         target: Token,
         gas_price: U256,
-        gas_usage: U256,
+        expected_gas_usage: U256,
+        max_gas_usage: U256,
         block_number: U64,
     ) -> ArbritageAttempt {
         let one = if source.address == self.weth.address {
@@ -186,13 +189,13 @@ impl ArbritagePair {
 
         let mut amount = one;
         let mut result = self
-            .run(&source, &target, amount, gas_price, gas_usage)
+            .run(&source, &target, amount, gas_price, expected_gas_usage)
             .await;
 
         for i in 2..=10 {
             let amount2 = one * i;
             let result2 = self
-                .run(&source, &target, amount2, gas_price, gas_usage)
+                .run(&source, &target, amount2, gas_price, expected_gas_usage)
                 .await;
 
             if result < result2 {
@@ -206,7 +209,8 @@ impl ArbritagePair {
             tokens: (source, target),
             block_number,
             gas_price,
-            gas_usage,
+            expected_gas_usage,
+            max_gas_usage,
             amount,
             result,
         }
@@ -215,7 +219,8 @@ impl ArbritagePair {
     async fn attempts(
         &self,
         gas_price: U256,
-        gas_usage: U256,
+        expected_gas_usage: U256,
+        max_gas_usage: U256,
         block_number: U64,
     ) -> Vec<ArbritageAttempt> {
         vec![
@@ -223,7 +228,8 @@ impl ArbritagePair {
                 self.token0.clone(),
                 self.token1.clone(),
                 gas_price,
-                gas_usage,
+                expected_gas_usage,
+                max_gas_usage,
                 block_number,
             )
             .await,
@@ -231,7 +237,8 @@ impl ArbritagePair {
                 self.token1.clone(),
                 self.token0.clone(),
                 gas_price,
-                gas_usage,
+                expected_gas_usage,
+                max_gas_usage,
                 block_number,
             )
             .await,
@@ -315,7 +322,7 @@ async fn execute(
             Password::new(std::env::var("ARBRITO_EXEC_PASSWORD").unwrap()),
             Some(TransactionCondition::Block(attempt.block_number.as_u64())),
         ))
-        .gas(attempt.gas_usage)
+        .gas(attempt.max_gas_usage)
         .gas_price(GasPrice::Value(attempt.gas_price))
         .confirmations(1)
         .nonce(nonce)
@@ -357,7 +364,8 @@ async fn main() {
     let executor_address =
         H160::from_str(EXECUTOR_ADDRESS).expect("failed parsing executor address");
 
-    let gas_usage = U256::from(GAS_USAGE);
+    let expected_gas_usage = U256::from(EXPECTED_GAS_USAGE);
+    let max_gas_usage = U256::from(MAX_GAS_USAGE);
     let (tx, mut rx) = unbounded_channel::<ArbritageAttempt>();
 
     let executor_web3 = web3.clone();
@@ -426,16 +434,16 @@ async fn main() {
                 * GAS_SCALE;
 
             log::info!(
-                "{} Max execution cost {} @ {} gwei",
+                "{} Expected execution cost {} @ {} gwei",
                 format_block_number(block_number),
-                format_eth(gas_price * gas_usage),
+                format_eth(gas_price * expected_gas_usage),
                 gas_price / U256::exp10(9)
             );
 
             let t = std::time::Instant::now();
 
             let attempt_futs = arbritage_pairs.iter().map(|pair| {
-                pair.attempts(gas_price, gas_usage, block_number)
+                pair.attempts(gas_price, expected_gas_usage, max_gas_usage, block_number)
                     .map(|attempts| {
                         for attempt in &attempts {
                             if let ArbritageResult::NetProfit(_, _, _) = attempt.result {
@@ -477,9 +485,10 @@ async fn main() {
             }
 
             log::info!(
-                "{} Processed in {:.2} seconds",
+                "{} Processed in {:.2} seconds ({} pairs)",
                 format_block_number(block_number),
-                t.elapsed().as_secs_f64()
+                t.elapsed().as_secs_f64(),
+                arbritage_pairs.len()
             );
 
             ()
