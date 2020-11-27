@@ -2,7 +2,7 @@ use colored::Colorize;
 use ethcontract::{Account, BlockNumber, GasPrice, Password, TransactionCondition};
 use futures::FutureExt;
 use pooller::{
-    gen::{Arbrito, Balancer, Uniswap, UniswapPair},
+    gen::{Arbrito, Balancer, UniswapPair},
     Pairs, Token,
 };
 use std::{collections::HashMap, str::FromStr, sync::Arc};
@@ -15,7 +15,6 @@ use web3::{
     Web3,
 };
 
-const UNISWAP_ADDRESS: &str = "7a250d5630B4cF539739dF2C5dAcb4c659F2488D";
 const WETH_ADDRESS: &str = "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
 const ARBRITO_ADDRESS: &str = "e96B6680a8ef1D8d561171948226bc3A133fA56D";
 const EXECUTOR_ADDRESS: &str = "Af43007aD675D6C72E96905cf4d8acB58ba0E041";
@@ -83,7 +82,6 @@ struct ArbritageAttempt {
 
 #[derive(Clone, Debug)]
 struct ArbritagePair {
-    uniswap_router: Uniswap,
     uniswap_pair: UniswapPair,
     balancer: Balancer,
     token0: Token,
@@ -376,8 +374,6 @@ async fn main() {
     let web3 = Web3::new(WebSocket::new(WEB3_ENDPOINT).await.expect("ws failed"));
 
     let weth_address = H160::from_str(WETH_ADDRESS).expect("failed parsing weth address");
-    let uniswap_router = H160::from_str(UNISWAP_ADDRESS).expect("failed parsing uniswap address");
-    let uniswap = Uniswap::at(&web3, uniswap_router);
 
     let Pairs { tokens, pairs } = Pairs::read().expect("pairs reading failed");
     let tokens: HashMap<_, _> = tokens.into_iter().map(|t| (t.address, t)).collect();
@@ -435,7 +431,6 @@ async fn main() {
             token1: tokens.get(&pair.token1).expect("unknown token").clone(),
             balancer: Balancer::at(&web3, pair.balancer),
             uniswap_pair: UniswapPair::at(&web3, pair.uniswap),
-            uniswap_router: uniswap.clone(),
             weth: weth.clone(),
         })
         .collect();
