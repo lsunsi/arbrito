@@ -108,12 +108,22 @@ impl ArbritagePair {
         expected_gas_usage: U256,
         target_net_profit: U256,
     ) -> ArbritageResult {
-        let uniswap_amount = self
-            .uniswap_router
-            .get_amounts_in(amount, vec![target.address, source.address])
+        let (reserve0, reserve1, _) = self
+            .uniswap_pair
+            .get_reserves()
             .call()
             .await
-            .expect("uniswap get_amounts_in failed")[0];
+            .expect("uniswap_pair get_reserves failed");
+
+        let (reserve_out, reserve_in) = if self.token0.address == source.address {
+            (reserve0, reserve1)
+        } else {
+            (reserve1, reserve0)
+        };
+
+        let uniswap_amount = (amount * U256::from(reserve_in) * 1000)
+            / ((U256::from(reserve_out) - amount) * 997)
+            + 1;
 
         let balancer_amount = self
             .balancer
