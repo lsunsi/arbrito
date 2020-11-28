@@ -28,7 +28,7 @@ struct UniswapGetPairs;
 )]
 struct BalancerGetPools;
 
-fn parse_address(addr: String) -> H160 {
+fn parse_address(addr: &str) -> H160 {
     H160::from_str(addr.strip_prefix("0x").expect("missing prefix")).expect("h160 parsing failed")
 }
 
@@ -75,15 +75,15 @@ async fn uniswap_pairs(client: &Client, min_reserve_eth: BigDecimal) -> Vec<(H16
 
     for pair in data.pairs {
         pairs.push((
-            parse_address(pair.id),
+            parse_address(&pair.id),
             Token {
                 symbol: pair.token0.symbol,
-                address: parse_address(pair.token0.id),
+                address: parse_address(&pair.token0.id),
                 decimals: parse_decimals(pair.token0.decimals),
             },
             Token {
                 symbol: pair.token1.symbol,
-                address: parse_address(pair.token1.id),
+                address: parse_address(&pair.token1.id),
                 decimals: parse_decimals(pair.token1.decimals),
             },
         ));
@@ -127,15 +127,41 @@ async fn balancer_pools(
         })
         .await;
 
-        pools.push(
-            data.pools
-                .into_iter()
-                .map(|p| {
-                    count += 1;
-                    parse_address(p.id)
-                })
-                .collect(),
-        );
+        let mut valid_pools = vec![];
+
+        for pool in data.pools {
+            let tokens = match pool.tokens {
+                None => continue,
+                Some(a) => a,
+            };
+
+            let t0 = tokens
+                .iter()
+                .find(|t| parse_address(&t.address) == token0.address)
+                .expect("Balancer: Could not find token0 on pool");
+
+            let t1 = tokens
+                .iter()
+                .find(|t| parse_address(&t.address) == token1.address)
+                .expect("Balancer: Could not find token1 on pool");
+
+            if t0.denorm_weight != t1.denorm_weight {
+                log::debug!(
+                    "Balancer: dropping pool for {} {} due to unbalanced weights {} {} ({})",
+                    token0.symbol,
+                    token1.symbol,
+                    t0.denorm_weight,
+                    t1.denorm_weight,
+                    pool.id
+                );
+                continue;
+            }
+
+            valid_pools.push(parse_address(&pool.id));
+        }
+
+        count += valid_pools.len();
+        pools.push(valid_pools);
     }
 
     log::info!("balancer_pools | {} pools fetched", count);
