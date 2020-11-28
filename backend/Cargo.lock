@@ -1622,6 +1622,7 @@ dependencies = [
  "futures 0.3.8",
  "graphql_client",
  "log",
+ "num-bigint",
  "rayon",
  "reqwest",
  "serde",
