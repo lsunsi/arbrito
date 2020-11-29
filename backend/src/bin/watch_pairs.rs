@@ -24,8 +24,8 @@ const EXPECTED_GAS_USAGE: u128 = 350_000;
 const MAX_GAS_USAGE: u128 = 400_000;
 const MIN_GAS_SCALE: u8 = 2;
 
-fn format_colored_eth(amount: U256) -> String {
-    let string = format_eth(amount);
+fn format_amount_colored(token: &Token, amount: U256) -> String {
+    let string = format_amount(token, amount);
 
     if amount >= U256::exp10(18) {
         string.bright_green().bold().italic().underline()
@@ -41,13 +41,14 @@ fn format_colored_eth(amount: U256) -> String {
     .to_string()
 }
 
-fn format_eth(amount: U256) -> String {
-    let decimals = U256::exp10(18);
+fn format_amount(token: &Token, amount: U256) -> String {
+    let decimals = U256::exp10(token.decimals);
     format!(
-        "Ξ {}.{:02$}",
+        "{} {}.{:03$}",
+        token.symbol,
         (amount / decimals).as_u128(),
         (amount % decimals).as_u128(),
-        18,
+        token.decimals,
     )
 }
 
@@ -247,12 +248,11 @@ async fn execute(
             amount,
         } => {
             log::info!(
-                "{} {} {} -> {} = {} @ {} gwei",
+                "{} {}: borrow {} for {} profit @ {} gwei",
                 format_block_number(attempt.block_number),
                 "Executing attempt".bold().underline(),
-                attempt.tokens.0.symbol,
-                attempt.tokens.1.symbol,
-                format_colored_eth(weth_profit),
+                format_amount(&attempt.tokens.0, amount),
+                format_amount_colored(&attempt.pair.weth, weth_profit),
                 gas_price / U256::exp10(9)
             );
             log::debug!(
@@ -423,10 +423,12 @@ async fn main() {
                 .expect("failed getting gas price")
                 * MIN_GAS_SCALE;
 
+            let min_required_profit = target_net_profit + min_gas_price * expected_gas_usage;
+
             log::info!(
                 "{} Min required profit {} @ {} gwei",
                 format_block_number(block_number),
-                format_eth(target_net_profit + min_gas_price * expected_gas_usage),
+                format_amount(&weth, min_required_profit),
                 min_gas_price / U256::exp10(9)
             );
 
@@ -461,22 +463,20 @@ async fn main() {
                 ArbritageResult::NotProfit => {
                     log::info!("{} No profit found", format_block_number(block_number))
                 }
-                ArbritageResult::GrossProfit { weth_profit, .. } => {
-                    log::info!(
-                        "{} Highest profit found: {} -> {} = {}",
-                        format_block_number(block_number),
-                        attempt.tokens.0.symbol,
-                        attempt.tokens.1.symbol,
-                        format_colored_eth(weth_profit),
-                    );
+                ArbritageResult::GrossProfit {
+                    weth_profit,
+                    amount,
                 }
-                ArbritageResult::NetProfit { weth_profit, .. } => {
+                | ArbritageResult::NetProfit {
+                    weth_profit,
+                    amount,
+                    ..
+                } => {
                     log::info!(
-                        "{} Highest profit found: {} -> {} = {}",
+                        "{} Highest profit found: borrow {} for {} profit",
                         format_block_number(block_number),
-                        attempt.tokens.0.symbol,
-                        attempt.tokens.1.symbol,
-                        format_colored_eth(weth_profit)
+                        format_amount(&attempt.tokens.0, amount),
+                        format_amount_colored(&weth, weth_profit),
                     );
                 }
             }

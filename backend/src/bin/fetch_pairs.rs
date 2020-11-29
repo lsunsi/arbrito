@@ -103,12 +103,6 @@ async fn balancer_pools(
     let mut count = 0;
 
     for (index, (_, token0, token1)) in uniswap_pairs.into_iter().enumerate() {
-        log::info!(
-            "balancer_pools | started {} / {}",
-            index + 1,
-            uniswap_pairs.len()
-        );
-
         let query = BalancerGetPools::build_query(balancer_get_pools::Variables {
             min_liquidity: min_liquidity.clone(),
             max_swap_fee: max_swap_fee.clone(),
@@ -138,16 +132,16 @@ async fn balancer_pools(
             let t0 = tokens
                 .iter()
                 .find(|t| parse_address(&t.address) == token0.address)
-                .expect("Balancer: Could not find token0 on pool");
+                .expect("balancer_pools: Could not find token0 on pool");
 
             let t1 = tokens
                 .iter()
                 .find(|t| parse_address(&t.address) == token1.address)
-                .expect("Balancer: Could not find token1 on pool");
+                .expect("balancer_pools: Could not find token1 on pool");
 
             if t0.denorm_weight != t1.denorm_weight {
                 log::debug!(
-                    "Balancer: dropping pool for {} {} due to unbalanced weights {} {} ({})",
+                    "balancer_pools: dropping pool for {} {} due to unbalanced weights {} {} ({})",
                     token0.symbol,
                     token1.symbol,
                     t0.denorm_weight,
@@ -159,6 +153,15 @@ async fn balancer_pools(
 
             valid_pools.push(parse_address(&pool.id));
         }
+
+        log::info!(
+            "balancer_pools | {:>3} / {:<3} | {:<6} {:>6} | {} pools fetched",
+            index + 1,
+            uniswap_pairs.len(),
+            token0.symbol,
+            token1.symbol,
+            valid_pools.len()
+        );
 
         count += valid_pools.len();
         pools.push(valid_pools);
