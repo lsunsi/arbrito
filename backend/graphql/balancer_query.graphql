@@ -14,5 +14,9 @@ query BalancerGetPools(
     }
   ) {
     id
+    tokens {
+      address
+      denormWeight
+    }
   }
 }

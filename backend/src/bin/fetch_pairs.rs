@@ -28,7 +28,7 @@ struct UniswapGetPairs;
 )]
 struct BalancerGetPools;
 
-fn parse_address(addr: String) -> H160 {
+fn parse_address(addr: &str) -> H160 {
     H160::from_str(addr.strip_prefix("0x").expect("missing prefix")).expect("h160 parsing failed")
 }
 
@@ -75,15 +75,15 @@ async fn uniswap_pairs(client: &Client, min_reserve_eth: BigDecimal) -> Vec<(H16
 
     for pair in data.pairs {
         pairs.push((
-            parse_address(pair.id),
+            parse_address(&pair.id),
             Token {
                 symbol: pair.token0.symbol,
-                address: parse_address(pair.token0.id),
+                address: parse_address(&pair.token0.id),
                 decimals: parse_decimals(pair.token0.decimals),
             },
             Token {
                 symbol: pair.token1.symbol,
-                address: parse_address(pair.token1.id),
+                address: parse_address(&pair.token1.id),
                 decimals: parse_decimals(pair.token1.decimals),
             },
         ));
@@ -103,12 +103,6 @@ async fn balancer_pools(
     let mut count = 0;
 
     for (index, (_, token0, token1)) in uniswap_pairs.into_iter().enumerate() {
-        log::info!(
-            "balancer_pools | started {} / {}",
-            index + 1,
-            uniswap_pairs.len()
-        );
-
         let query = BalancerGetPools::build_query(balancer_get_pools::Variables {
             min_liquidity: min_liquidity.clone(),
             max_swap_fee: max_swap_fee.clone(),
@@ -127,15 +121,50 @@ async fn balancer_pools(
         })
         .await;
 
-        pools.push(
-            data.pools
-                .into_iter()
-                .map(|p| {
-                    count += 1;
-                    parse_address(p.id)
-                })
-                .collect(),
+        let mut valid_pools = vec![];
+
+        for pool in data.pools {
+            let tokens = match pool.tokens {
+                None => continue,
+                Some(a) => a,
+            };
+
+            let t0 = tokens
+                .iter()
+                .find(|t| parse_address(&t.address) == token0.address)
+                .expect("balancer_pools: Could not find token0 on pool");
+
+            let t1 = tokens
+                .iter()
+                .find(|t| parse_address(&t.address) == token1.address)
+                .expect("balancer_pools: Could not find token1 on pool");
+
+            if t0.denorm_weight != t1.denorm_weight {
+                log::debug!(
+                    "balancer_pools: dropping pool for {} {} due to unbalanced weights {} {} ({})",
+                    token0.symbol,
+                    token1.symbol,
+                    t0.denorm_weight,
+                    t1.denorm_weight,
+                    pool.id
+                );
+                continue;
+            }
+
+            valid_pools.push(parse_address(&pool.id));
+        }
+
+        log::info!(
+            "balancer_pools | {:>3} / {:<3} | {:<6} {:>6} | {} pools fetched",
+            index + 1,
+            uniswap_pairs.len(),
+            token0.symbol,
+            token1.symbol,
+            valid_pools.len()
         );
+
+        count += valid_pools.len();
+        pools.push(valid_pools);
     }
 
     log::info!("balancer_pools | {} pools fetched", count);
