@@ -32,4 +32,4 @@ version = "0.10.9"
 features = ["json"]
 
 [build-dependencies]
-ethcontract-generate = "0.8.0"
+ethcontract-generate = "0.9.0"

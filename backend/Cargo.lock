@@ -527,7 +527,7 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "70d483397a1bca79be56ff5c944e73c3a767ac8b90f3608c4f413f433e1a35b4"
 dependencies = [
- "ethcontract-common 0.9.0",
+ "ethcontract-common",
  "ethcontract-derive",
  "futures 0.3.8",
  "futures-timer",
@@ -541,22 +541,6 @@ dependencies = [
  "uint",
  "web3",
  "zeroize",
-]
-
-[[package]]
-name = "ethcontract-common"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "baad5ea355d7779eeb1c24bd2a6ec1c0fe7ac75c2105d77a7090463630ad96c7"
-dependencies = [
- "ethabi",
- "hex",
- "serde",
- "serde_derive",
- "serde_json",
- "thiserror",
- "tiny-keccak 2.0.2",
- "web3",
 ]
 
 [[package]]
@@ -581,27 +565,11 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e05a965a663f1850aa64de2d33d5e7f4ccb5dfef9f0492c6ea0601c0d83595d"
 dependencies = [
- "ethcontract-common 0.9.0",
- "ethcontract-generate 0.9.0",
+ "ethcontract-common",
+ "ethcontract-generate",
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "ethcontract-generate"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4643e53caf3dbfd6c646ea867c4291ae9ebef4f3f677e6a02952023b481732a"
-dependencies = [
- "Inflector",
- "anyhow",
- "curl",
- "ethcontract-common 0.8.0",
- "proc-macro2",
- "quote",
- "syn",
- "url",
 ]
 
 [[package]]
@@ -613,7 +581,7 @@ dependencies = [
  "Inflector",
  "anyhow",
  "curl",
- "ethcontract-common 0.9.0",
+ "ethcontract-common",
  "proc-macro2",
  "quote",
  "syn",
@@ -1574,7 +1542,7 @@ dependencies = [
  "colored",
  "env_logger",
  "ethcontract",
- "ethcontract-generate 0.8.0",
+ "ethcontract-generate",
  "futures 0.3.8",
  "graphql_client",
  "log",
