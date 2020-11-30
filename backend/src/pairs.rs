@@ -9,6 +9,7 @@ pub struct Token {
     pub address: H160,
     pub symbol: String,
     pub decimals: usize,
+    pub weth_uniswap_pair: Option<H160>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
