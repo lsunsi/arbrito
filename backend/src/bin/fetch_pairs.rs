@@ -3,12 +3,13 @@ use futures::{Future, TryFutureExt};
 use graphql_client::{GraphQLQuery, Response};
 use pooller::{Pair, Pairs, Token};
 use reqwest::Client;
-use std::{fmt::Debug, str::FromStr, time::Duration};
+use std::{collections::HashMap, fmt::Debug, str::FromStr, time::Duration};
 use tokio::time::delay_for;
 use web3::types::H160;
 
 const UNISWAP_URL: &str = "https://api.thegraph.com/subgraphs/name/ianlapham/uniswapv2";
 const BALANCER_URL: &str = "https://api.thegraph.com/subgraphs/name/balancer-labs/balancer-beta";
+const WETH_ADDRESS: &str = "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
 
 const UNISWAP_MIN_ETH_RESERVE: u64 = 10_000;
 const BALANCER_MIN_LIQUIDITY: u64 = 100_000;
@@ -53,7 +54,11 @@ async fn send<T, E: Debug, Fut: Future<Output = Result<Response<T>, E>>>(
     }
 }
 
-async fn uniswap_pairs(client: &Client, min_reserve_eth: BigDecimal) -> Vec<(H160, Token, Token)> {
+async fn uniswap_pairs(
+    client: &Client,
+    weth_address: H160,
+    min_reserve_eth: BigDecimal,
+) -> Vec<(H160, Token, Token)> {
     log::info!("uniswap_pairs | started");
     let query = UniswapGetPairs::build_query(uniswap_get_pairs::Variables { min_reserve_eth });
 
@@ -66,7 +71,7 @@ async fn uniswap_pairs(client: &Client, min_reserve_eth: BigDecimal) -> Vec<(H16
     })
     .await;
 
-    let mut pairs = vec![];
+    let mut raw_pairs = vec![];
     let parse_decimals = |bigdec: BigDecimal| bigdec.to_usize().expect("decimals parsing failed");
 
     if data.pairs.len() == 1000 {
@@ -74,22 +79,98 @@ async fn uniswap_pairs(client: &Client, min_reserve_eth: BigDecimal) -> Vec<(H16
     }
 
     for pair in data.pairs {
-        pairs.push((
+        raw_pairs.push((
             parse_address(&pair.id),
-            Token {
-                symbol: pair.token0.symbol,
-                address: parse_address(&pair.token0.id),
-                decimals: parse_decimals(pair.token0.decimals),
-            },
-            Token {
-                symbol: pair.token1.symbol,
-                address: parse_address(&pair.token1.id),
-                decimals: parse_decimals(pair.token1.decimals),
-            },
+            (
+                pair.token0.symbol,
+                parse_address(&pair.token0.id),
+                parse_decimals(pair.token0.decimals),
+            ),
+            (
+                pair.token1.symbol,
+                parse_address(&pair.token1.id),
+                parse_decimals(pair.token1.decimals),
+            ),
         ));
     }
 
-    log::info!("uniswap_pairs | {} pairs fetched", pairs.len());
+    let weth_pairs: HashMap<H160, H160> = raw_pairs
+        .iter()
+        .filter_map(|(address, raw_token0, raw_token1)| {
+            if raw_token0.1 == weth_address {
+                Some((raw_token1.1, *address))
+            } else if raw_token1.1 == weth_address {
+                Some((raw_token0.1, *address))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let mut pairs = vec![];
+    let mut dropped = 0;
+
+    for (address, raw_token0, raw_token1) in raw_pairs {
+        let token0 = {
+            if raw_token0.1 == weth_address {
+                Token {
+                    symbol: raw_token0.0,
+                    address: raw_token0.1,
+                    decimals: raw_token0.2,
+                    weth_uniswap_pair: None,
+                }
+            } else {
+                let weth_uniswap_pair = match weth_pairs.get(&raw_token0.1) {
+                    Some(a) => a,
+                    None => {
+                        dropped += 1;
+                        continue;
+                    }
+                };
+
+                Token {
+                    symbol: raw_token0.0,
+                    address: raw_token0.1,
+                    decimals: raw_token0.2,
+                    weth_uniswap_pair: Some(*weth_uniswap_pair),
+                }
+            }
+        };
+
+        let token1 = {
+            if raw_token1.1 == weth_address {
+                Token {
+                    symbol: raw_token1.0,
+                    address: raw_token1.1,
+                    decimals: raw_token1.2,
+                    weth_uniswap_pair: None,
+                }
+            } else {
+                let weth_uniswap_pair = match weth_pairs.get(&raw_token1.1) {
+                    Some(a) => a,
+                    None => {
+                        dropped += 1;
+                        continue;
+                    }
+                };
+
+                Token {
+                    symbol: raw_token1.0,
+                    address: raw_token1.1,
+                    decimals: raw_token1.2,
+                    weth_uniswap_pair: Some(*weth_uniswap_pair),
+                }
+            }
+        };
+
+        pairs.push((address, token0, token1));
+    }
+
+    log::info!(
+        "uniswap_pairs | {} pairs fetched ({} dropped)",
+        pairs.len(),
+        dropped
+    );
     pairs
 }
 
@@ -202,6 +283,8 @@ fn build_pairs(uniswap_pairs: Vec<(H160, Token, Token)>, balancer_pools: Vec<Vec
 async fn main() {
     env_logger::init();
 
+    let weth_address = H160::from_str(WETH_ADDRESS).expect("weth address parsing failed");
+
     let uniswap_min_eth_reserve = BigDecimal::from_u64(UNISWAP_MIN_ETH_RESERVE)
         .expect("UNISWAP_MIN_ETH_RESERVE parsing failed");
 
@@ -213,7 +296,7 @@ async fn main() {
 
     let client = reqwest::Client::new();
 
-    let uniswap_pairs = uniswap_pairs(&client, uniswap_min_eth_reserve).await;
+    let uniswap_pairs = uniswap_pairs(&client, weth_address, uniswap_min_eth_reserve).await;
     let balancer_pools = balancer_pools(
         &client,
         &uniswap_pairs,
