@@ -65,7 +65,7 @@ fn root(ri: U256, ro: U256, bi: U256, bo: U256, s: U256) -> Option<U256> {
 }
 
 fn uniswap_in_given_out(ri: U256, ro: U256, amount: U256) -> U256 {
-    (amount * U256::from(ri) * 1000) / ((U256::from(ro) - amount) * 997) + 1
+    (amount * ri * 1000) / ((ro - amount) * 997) + 1
 }
 
 fn balancer_out_given_in(bi: U256, bo: U256, s: U256, amount: U256) -> U256 {
@@ -86,6 +86,10 @@ pub fn max_profit(ri: U256, ro: U256, bi: U256, bo: U256, s: U256) -> Option<(U2
     let profit = profit(ri, ro, bi, bo, s, amount)?;
 
     Some((amount, profit))
+}
+
+pub fn uniswap_out_given_in(ri: U256, ro: U256, amount: U256) -> U256 {
+    (amount * ro * 997) / (ri * 1000 + amount * 997)
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@ use ethcontract::{Account, BlockNumber, GasPrice, Password, TransactionCondition
 use futures::FutureExt;
 use pooller::{
     gen::{Arbrito, Balancer, UniswapPair},
-    max_profit, Pairs, Token,
+    max_profit, uniswap_out_given_in, Pairs,
 };
 use std::{collections::HashMap, str::FromStr, sync::Arc};
 use tokio::sync::{mpsc::unbounded_channel, Mutex, OwnedMutexGuard};
@@ -24,7 +24,7 @@ const EXPECTED_GAS_USAGE: u128 = 350_000;
 const MAX_GAS_USAGE: u128 = 400_000;
 const MIN_GAS_SCALE: u8 = 2;
 
-fn format_amount_colored(token: &Token, amount: U256) -> String {
+fn format_amount_colored(token: &ArbritageToken, amount: U256) -> String {
     let string = format_amount(token, amount);
 
     if amount >= U256::exp10(18) {
@@ -41,7 +41,7 @@ fn format_amount_colored(token: &Token, amount: U256) -> String {
     .to_string()
 }
 
-fn format_amount(token: &Token, amount: U256) -> String {
+fn format_amount(token: &ArbritageToken, amount: U256) -> String {
     let decimals = U256::exp10(token.decimals);
     format!(
         "{} {}.{:03$}",
@@ -79,9 +79,17 @@ enum ArbritageResult {
 }
 
 #[derive(Debug, Clone)]
+struct ArbritageToken {
+    weth_uniswap_pair: Option<UniswapPair>,
+    decimals: usize,
+    symbol: String,
+    address: H160,
+}
+
+#[derive(Debug, Clone)]
 struct ArbritageAttempt {
     pair: ArbritagePair,
-    tokens: (Token, Token),
+    tokens: (ArbritageToken, ArbritageToken),
     result: ArbritageResult,
     max_gas_usage: U256,
     block_number: U64,
@@ -91,16 +99,16 @@ struct ArbritageAttempt {
 struct ArbritagePair {
     uniswap_pair: UniswapPair,
     balancer: Balancer,
-    token0: Token,
-    token1: Token,
-    weth: Token,
+    token0: ArbritageToken,
+    token1: ArbritageToken,
+    weth: ArbritageToken,
 }
 
 impl ArbritagePair {
     async fn run(
         &self,
-        source: &Token,
-        weth: &Token,
+        borrow_token: &ArbritageToken,
+        profit_token: &ArbritageToken,
         min_gas_price: U256,
         expected_gas_usage: U256,
         target_net_profit: U256,
@@ -112,7 +120,7 @@ impl ArbritagePair {
             .await
             .expect("uniswap_pair get_reserves failed");
 
-        let (ro, ri) = if self.token0.address == source.address {
+        let (ro, ri) = if self.token0.address == borrow_token.address {
             (reserve0, reserve1)
         } else {
             (reserve1, reserve0)
@@ -120,13 +128,13 @@ impl ArbritagePair {
 
         let bi = self
             .balancer
-            .get_balance(source.address)
+            .get_balance(borrow_token.address)
             .call()
             .await
             .expect("balancer get_balance(source) failed");
         let bo = self
             .balancer
-            .get_balance(weth.address)
+            .get_balance(profit_token.address)
             .call()
             .await
             .expect("balancer get_balance(target) failed");
@@ -137,9 +145,38 @@ impl ArbritagePair {
             .await
             .expect("balancer get_swap_fee failed");
 
-        let (amount, weth_profit) = match max_profit(U256::from(ri), U256::from(ro), bi, bo, s) {
+        let (amount, profit) = match max_profit(U256::from(ri), U256::from(ro), bi, bo, s) {
             None => return ArbritageResult::NotProfit,
             Some(a) => a,
+        };
+
+        let weth_profit = if profit_token.address == self.weth.address {
+            profit
+        } else {
+            let profit_pair = profit_token
+                .weth_uniswap_pair
+                .as_ref()
+                .expect("required uniswap pair missing");
+
+            let (reserve0, reserve1, _) = profit_pair
+                .get_reserves()
+                .call()
+                .await
+                .expect("uniswap_pair profit get_reserves failed");
+
+            let token0address = profit_pair
+                .token_0()
+                .call()
+                .await
+                .expect("uniswap_pair profit token0 failed");
+
+            let (ro, ri) = if token0address == profit_token.address {
+                (reserve1, reserve0)
+            } else {
+                (reserve0, reserve1)
+            };
+
+            uniswap_out_given_in(U256::from(ri), U256::from(ro), profit)
         };
 
         if weth_profit <= target_net_profit {
@@ -167,8 +204,8 @@ impl ArbritagePair {
 
     async fn attempt(
         &self,
-        source: Token,
-        weth: Token,
+        borrow_token: ArbritageToken,
+        profit_token: ArbritageToken,
         min_gas_price: U256,
         expected_gas_usage: U256,
         max_gas_usage: U256,
@@ -177,8 +214,8 @@ impl ArbritagePair {
     ) -> ArbritageAttempt {
         let result = self
             .run(
-                &source,
-                &weth,
+                &borrow_token,
+                &profit_token,
                 min_gas_price,
                 expected_gas_usage,
                 target_net_profit,
@@ -187,7 +224,7 @@ impl ArbritagePair {
 
         ArbritageAttempt {
             pair: self.clone(),
-            tokens: (source, weth),
+            tokens: (borrow_token, profit_token),
             max_gas_usage,
             block_number,
             result,
@@ -202,35 +239,28 @@ impl ArbritagePair {
         target_net_profit: U256,
         block_number: U64,
     ) -> Vec<ArbritageAttempt> {
-        if self.token0.address == self.weth.address {
-            vec![
-                self.attempt(
-                    self.token1.clone(),
-                    self.token0.clone(),
-                    min_gas_price,
-                    expected_gas_usage,
-                    max_gas_usage,
-                    target_net_profit,
-                    block_number,
-                )
-                .await,
-            ]
-        } else if self.token1.address == self.weth.address {
-            vec![
-                self.attempt(
-                    self.token0.clone(),
-                    self.token1.clone(),
-                    min_gas_price,
-                    expected_gas_usage,
-                    max_gas_usage,
-                    target_net_profit,
-                    block_number,
-                )
-                .await,
-            ]
-        } else {
-            vec![]
-        }
+        vec![
+            self.attempt(
+                self.token0.clone(),
+                self.token1.clone(),
+                min_gas_price,
+                expected_gas_usage,
+                max_gas_usage,
+                target_net_profit,
+                block_number,
+            )
+            .await,
+            self.attempt(
+                self.token1.clone(),
+                self.token0.clone(),
+                min_gas_price,
+                expected_gas_usage,
+                max_gas_usage,
+                target_net_profit,
+                block_number,
+            )
+            .await,
+        ]
     }
 }
 
@@ -248,11 +278,12 @@ async fn execute(
             amount,
         } => {
             log::info!(
-                "{} {}: borrow {} for {} profit @ {} gwei",
+                "{} {}: borrow {} for {} profit ({}) @ {} gwei",
                 format_block_number(attempt.block_number),
                 "Executing attempt".bold().underline(),
                 format_amount(&attempt.tokens.0, amount),
                 format_amount_colored(&attempt.pair.weth, weth_profit),
+                attempt.tokens.1.symbol,
                 gas_price / U256::exp10(9)
             );
             log::debug!(
@@ -345,7 +376,21 @@ async fn main() {
     let weth_address = H160::from_str(WETH_ADDRESS).expect("failed parsing weth address");
 
     let Pairs { tokens, pairs } = Pairs::read().expect("pairs reading failed");
-    let tokens: HashMap<_, _> = tokens.into_iter().map(|t| (t.address, t)).collect();
+    let tokens: HashMap<_, _> = tokens
+        .into_iter()
+        .map(|t| {
+            (
+                t.address,
+                ArbritageToken {
+                    weth_uniswap_pair: t.weth_uniswap_pair.map(|a| UniswapPair::at(&web3, a)),
+                    decimals: t.decimals,
+                    address: t.address,
+                    symbol: t.symbol,
+                },
+            )
+        })
+        .collect();
+
     let weth = tokens.get(&weth_address).expect("where's my weth, boy?");
 
     let arbrito_address = H160::from_str(ARBRITO_ADDRESS).expect("failed parsing arbrito address");
@@ -473,9 +518,10 @@ async fn main() {
                     ..
                 } => {
                     log::info!(
-                        "{} Highest profit found: borrow {} for {} profit",
+                        "{} Highest profit found: borrow {} for {} profit ({})",
                         format_block_number(block_number),
                         format_amount(&attempt.tokens.0, amount),
+                        attempt.tokens.1.symbol,
                         format_amount_colored(&weth, weth_profit),
                     );
                 }
