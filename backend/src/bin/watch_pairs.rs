@@ -1,5 +1,5 @@
 use colored::Colorize;
-use ethcontract::{Account, BlockNumber, GasPrice, Password, TransactionCondition};
+use ethcontract::{Account, BlockId, BlockNumber, GasPrice, Password, TransactionCondition};
 use futures::FutureExt;
 use pooller::{
     gen::{Arbrito, Balancer, UniswapPair},
@@ -112,10 +112,14 @@ impl ArbritagePair {
         min_gas_price: U256,
         expected_gas_usage: U256,
         target_net_profit: U256,
+        block_number: U64,
     ) -> ArbritageResult {
+        let block = BlockId::Number(BlockNumber::Number(block_number));
+
         let (reserve0, reserve1, _) = self
             .uniswap_pair
             .get_reserves()
+            .block(block)
             .call()
             .await
             .expect("uniswap_pair get_reserves failed");
@@ -129,18 +133,21 @@ impl ArbritagePair {
         let bi = self
             .balancer
             .get_balance(borrow_token.address)
+            .block(block)
             .call()
             .await
             .expect("balancer get_balance(source) failed");
         let bo = self
             .balancer
             .get_balance(profit_token.address)
+            .block(block)
             .call()
             .await
             .expect("balancer get_balance(target) failed");
         let s = self
             .balancer
             .get_swap_fee()
+            .block(block)
             .call()
             .await
             .expect("balancer get_swap_fee failed");
@@ -160,12 +167,14 @@ impl ArbritagePair {
 
             let (reserve0, reserve1, _) = profit_pair
                 .get_reserves()
+                .block(block)
                 .call()
                 .await
                 .expect("uniswap_pair profit get_reserves failed");
 
             let token0address = profit_pair
                 .token_0()
+                .block(block)
                 .call()
                 .await
                 .expect("uniswap_pair profit token0 failed");
@@ -219,6 +228,7 @@ impl ArbritagePair {
                 min_gas_price,
                 expected_gas_usage,
                 target_net_profit,
+                block_number,
             )
             .await;
 
@@ -324,6 +334,7 @@ async fn execute(
         .pair
         .uniswap_pair
         .get_reserves()
+        .block(BlockId::Number(BlockNumber::Number(attempt.block_number)))
         .call()
         .await
         .expect("failed getting reserves");
