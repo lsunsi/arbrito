@@ -1,9 +1,9 @@
-use bigdecimal::{BigDecimal, BigDecimal as BigInt, FromPrimitive, ToPrimitive};
+use bigdecimal::{BigDecimal, BigDecimal as BigInt, ToPrimitive};
 use futures::{Future, TryFutureExt};
 use graphql_client::{GraphQLQuery, Response};
 use pooller::{Pair, Pairs, Token};
 use reqwest::Client;
-use std::{collections::HashMap, fmt::Debug, str::FromStr, time::Duration};
+use std::{collections::HashMap, collections::HashSet, fmt::Debug, str::FromStr, time::Duration};
 use tokio::time::delay_for;
 use web3::types::H160;
 
@@ -11,9 +11,29 @@ const UNISWAP_URL: &str = "https://api.thegraph.com/subgraphs/name/ianlapham/uni
 const BALANCER_URL: &str = "https://api.thegraph.com/subgraphs/name/balancer-labs/balancer-beta";
 const WETH_ADDRESS: &str = "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
 
-const UNISWAP_MIN_ETH_RESERVE: u64 = 10_000;
-const BALANCER_MIN_LIQUIDITY: u64 = 100_000;
-const BALANCER_MAX_SWAP_FEE: f64 = 0.01;
+const ALLOWED_TOKENS: [&str; 21] = [
+    "C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", // WETH
+    "514910771AF9Ca656af840dff83E8264EcF986CA", // LINK
+    "A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // USDC
+    "2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", // WBTC
+    "6B175474E89094C44Da98b954EedeAC495271d0F", // DAI
+    "5864c777697Bf9881220328BF2f16908c9aFCD7e", // BUSD
+    "1f9840a85d5aF5bf1D1762F925BDADdC4201F984", // UNI
+    "EA86074fdAC85E6a605cd418668C63d2716cdfBc", // AAVE
+    "C011a73ee8576Fb46F5E1c5751cA3B9Fe0af2a6F", // SNX
+    "0bc529c00C6401aEF6D220BE8C6Ea1667F6Ad93e", // YFI
+    "04Fa0d235C4abf4BcF4787aF4CF447DE572eF828", // UMA
+    "c00e94Cb662C3520282E6f5717214004A7f26888", // COMP
+    "9f8F72aA9304c8B593d555F12eF6589cC3A579A2", // MKR
+    "ba100000625a3754423978a60c9317c58a424e3D", // BAL
+    "0F5D2fB29fb7d3CFeE444a200298f468908cC942", // MANA
+    "dd974D5C2e2928deA5F71b9825b8b646686BD200", // KNC
+    "967da4048cD07aB37855c090aAF366e4ce1b9F48", // OCEAN
+    "0000000000085d4780B73119b644AE5ecd22b376", // TUSD
+    "408e41876cCCDC0F92210600ef50372656052a38", // REN
+    "BBbbCA6A901c926F240b89EacB641d8Aec7AEafD", // LRC
+    "6B3595068778DD592e39A122f4f5a5cF09C90fE2", // SUSHI
+];
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -31,6 +51,10 @@ struct BalancerGetPools;
 
 fn parse_address(addr: &str) -> H160 {
     H160::from_str(addr.strip_prefix("0x").expect("missing prefix")).expect("h160 parsing failed")
+}
+
+fn parse_decimals(bigdec: &BigDecimal) -> usize {
+    bigdec.to_usize().expect("decimals parsing failed")
 }
 
 async fn send<T, E: Debug, Fut: Future<Output = Result<Response<T>, E>>>(
@@ -57,42 +81,69 @@ async fn send<T, E: Debug, Fut: Future<Output = Result<Response<T>, E>>>(
 async fn uniswap_pairs(
     client: &Client,
     weth_address: H160,
-    min_reserve_eth: BigDecimal,
+    allowed_tokens: &[H160],
 ) -> Vec<(H160, Token, Token)> {
-    log::info!("uniswap_pairs | started");
-    let query = UniswapGetPairs::build_query(uniswap_get_pairs::Variables { min_reserve_eth });
+    let tokens: Vec<_> = allowed_tokens
+        .iter()
+        .map(|addr| format!("{:?}", addr))
+        .collect();
 
-    let data: uniswap_get_pairs::ResponseData = send(&|| {
-        client
-            .post(UNISWAP_URL)
-            .json(&query)
-            .send()
-            .and_then(|a| a.json())
-    })
-    .await;
+    let mut pairs0 = vec![];
+    let mut pairs1 = vec![];
+
+    for page in 0.. {
+        log::info!("uniswap_pairs | started page {}", page + 1,);
+
+        let query = UniswapGetPairs::build_query(uniswap_get_pairs::Variables {
+            tokens: tokens.clone(),
+            skip: 1000 * page,
+        });
+
+        let data: uniswap_get_pairs::ResponseData = send(&|| {
+            client
+                .post(UNISWAP_URL)
+                .json(&query)
+                .send()
+                .and_then(|a| a.json())
+        })
+        .await;
+
+        if data.pairs0.len() == 0 && data.pairs1.len() == 0 {
+            break;
+        }
+
+        pairs0.extend(data.pairs0);
+        pairs1.extend(data.pairs1);
+    }
+
+    log::debug!(
+        "uniswap_pairs | counts pairs0={} pairs1={}",
+        pairs0.len(),
+        pairs1.len(),
+    );
 
     let mut raw_pairs = vec![];
-    let parse_decimals = |bigdec: BigDecimal| bigdec.to_usize().expect("decimals parsing failed");
+    let pairs1: HashSet<_> = pairs1.into_iter().map(|a| a.id).collect();
 
-    if data.pairs.len() == 1000 {
-        log::warn!("possible pagination limiting");
+    for pair0 in pairs0 {
+        if pairs1.contains(&pair0.id) {
+            raw_pairs.push((
+                parse_address(&pair0.id),
+                (
+                    pair0.token0.symbol.clone(),
+                    parse_address(&pair0.token0.id),
+                    parse_decimals(&pair0.token0.decimals),
+                ),
+                (
+                    pair0.token1.symbol.clone(),
+                    parse_address(&pair0.token1.id),
+                    parse_decimals(&pair0.token1.decimals),
+                ),
+            ));
+        }
     }
 
-    for pair in data.pairs {
-        raw_pairs.push((
-            parse_address(&pair.id),
-            (
-                pair.token0.symbol,
-                parse_address(&pair.token0.id),
-                parse_decimals(pair.token0.decimals),
-            ),
-            (
-                pair.token1.symbol,
-                parse_address(&pair.token1.id),
-                parse_decimals(pair.token1.decimals),
-            ),
-        ));
-    }
+    log::info!("uniswap_pairs | total raw pairs {}", raw_pairs.len());
 
     let weth_pairs: HashMap<H160, H160> = raw_pairs
         .iter()
@@ -174,19 +225,12 @@ async fn uniswap_pairs(
     pairs
 }
 
-async fn balancer_pools(
-    client: &Client,
-    uniswap_pairs: &[(H160, Token, Token)],
-    min_liquidity: BigDecimal,
-    max_swap_fee: BigDecimal,
-) -> Vec<Vec<H160>> {
+async fn balancer_pools(client: &Client, uniswap_pairs: &[(H160, Token, Token)]) -> Vec<Vec<H160>> {
     let mut pools = vec![];
     let mut count = 0;
 
     for (index, (_, token0, token1)) in uniswap_pairs.into_iter().enumerate() {
         let query = BalancerGetPools::build_query(balancer_get_pools::Variables {
-            min_liquidity: min_liquidity.clone(),
-            max_swap_fee: max_swap_fee.clone(),
             tokens: vec![
                 format!("{:?}", token0.address),
                 format!("{:?}", token1.address),
@@ -284,26 +328,17 @@ async fn main() {
     env_logger::init();
 
     let weth_address = H160::from_str(WETH_ADDRESS).expect("weth address parsing failed");
-
-    let uniswap_min_eth_reserve = BigDecimal::from_u64(UNISWAP_MIN_ETH_RESERVE)
-        .expect("UNISWAP_MIN_ETH_RESERVE parsing failed");
-
-    let balancer_min_liquidity = BigDecimal::from_u64(BALANCER_MIN_LIQUIDITY)
-        .expect("BALANCER_MIN_LIQUIDITY parsing failed");
-
-    let balancer_max_swap_fee =
-        BigDecimal::from_f64(BALANCER_MAX_SWAP_FEE).expect("BALANCER_MAX_SWAP_FEE parsing failed");
+    let allowed_tokens = ALLOWED_TOKENS
+        .iter()
+        .copied()
+        .map(H160::from_str)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("allowed tokens parsing failed");
 
     let client = reqwest::Client::new();
 
-    let uniswap_pairs = uniswap_pairs(&client, weth_address, uniswap_min_eth_reserve).await;
-    let balancer_pools = balancer_pools(
-        &client,
-        &uniswap_pairs,
-        balancer_min_liquidity,
-        balancer_max_swap_fee,
-    )
-    .await;
+    let uniswap_pairs = uniswap_pairs(&client, weth_address, &allowed_tokens).await;
+    let balancer_pools = balancer_pools(&client, &uniswap_pairs).await;
 
     let pairs = build_pairs(uniswap_pairs, balancer_pools);
     log::info!("save | started");
