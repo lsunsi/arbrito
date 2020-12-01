@@ -508,14 +508,14 @@ async fn main() {
                 })
             });
 
-            let attempt = join_all(attempt_futs)
-                .await
-                .into_iter()
-                .flatten()
+            let attempts: Vec<_> = join_all(attempt_futs).await.into_iter().flatten().collect();
+
+            let max_attempt = attempts
+                .iter()
                 .max_by(|a1, a2| a1.result.cmp(&a2.result))
                 .expect("empty arbritage results");
 
-            match attempt.result {
+            match max_attempt.result {
                 ArbritageResult::NotProfit => {
                     log::info!("{} No profit found", format_block_number(block_number))
                 }
@@ -531,18 +531,33 @@ async fn main() {
                     log::info!(
                         "{} Highest profit found: borrow {} for {} profit ({})",
                         format_block_number(block_number),
-                        format_amount(&attempt.tokens.0, amount),
-                        attempt.tokens.1.symbol,
+                        format_amount(&max_attempt.tokens.0, amount),
+                        max_attempt.tokens.1.symbol,
                         format_amount_colored(&weth, weth_profit),
                     );
                 }
             }
 
+            let mut not_profits_count = 0;
+            let mut gross_profits_count = 0;
+            let mut net_profits_count = 0;
+
+            for attempt in attempts {
+                match attempt.result {
+                    ArbritageResult::NotProfit => not_profits_count += 1,
+                    ArbritageResult::GrossProfit { .. } => gross_profits_count += 1,
+                    ArbritageResult::NetProfit { .. } => net_profits_count += 1,
+                }
+            }
+
             log::info!(
-                "{} Processed in {:.2} seconds ({} pairs)",
+                "{} Processed in {:.2} seconds ({} pairs | {} net + {} gross + {} not)",
                 format_block_number(block_number),
                 t.elapsed().as_secs_f64(),
-                arbritage_pairs.len()
+                arbritage_pairs.len(),
+                net_profits_count,
+                gross_profits_count,
+                not_profits_count
             );
 
             ()
