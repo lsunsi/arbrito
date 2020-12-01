@@ -43,7 +43,7 @@ fn root(ri: U256, ro: U256, bi: U256, bo: U256, s: U256) -> Option<U256> {
     let root0 = (-&b + delta.sqrt()) / (&a * &two);
     let root1 = (-&b - delta.sqrt()) / (&a * &two);
 
-    let viable = |x: &BigInt| x.sign() == Sign::Plus && x <= &ro;
+    let viable = |x: &BigInt| x.sign() == Sign::Plus && x < &ro;
     let to_u256 = |x: BigInt| U256::from_little_endian(&x.to_bytes_le().1);
 
     match (viable(&root0), viable(&root1)) {
@@ -52,12 +52,17 @@ fn root(ri: U256, ro: U256, bi: U256, bo: U256, s: U256) -> Option<U256> {
         (true, false) => Some(to_u256(root0)),
         (true, true) => {
             log::error!(
-                "Two viable roots?!. ri={} ro={} bi={} bo={} s={}",
+                "Two viable roots?! r1={} r2={} ri={} ro={} bi={} bo={} s={} a={} b={} c={}",
+                root0,
+                root1,
                 ri,
                 ro,
                 bi,
                 bo,
-                s
+                s,
+                a,
+                b,
+                c,
             );
             None
         }
