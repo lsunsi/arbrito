@@ -282,8 +282,8 @@ async fn execute(
                 format_block_number(attempt.block_number),
                 "Executing attempt".bold().underline(),
                 format_amount(&attempt.tokens.0, amount),
-                format_amount_colored(&attempt.pair.weth, weth_profit),
                 attempt.tokens.1.symbol,
+                format_amount_colored(&attempt.pair.weth, weth_profit),
                 gas_price / U256::exp10(9)
             );
             log::debug!(

@@ -1,20 +1,30 @@
-query UniswapGetPairs($minReserveETH: BigDecimal!) {
-  pairs(
-    where: { trackedReserveETH_gte: $minReserveETH }
+query UniswapGetPairs($tokens: [String!]!, $skip: Int!) {
+  pairs0: pairs(
+    where: { token0_in: $tokens }
     orderBy: trackedReserveETH
     orderDirection: desc
     first: 1000
+    skip: $skip
   ) {
     id
     token0 {
-      id
-      symbol
       decimals
+      symbol
+      id
     }
     token1 {
-      id
-      symbol
       decimals
+      symbol
+      id
     }
+  }
+  pairs1: pairs(
+    where: { token1_in: $tokens }
+    orderBy: trackedReserveETH
+    orderDirection: desc
+    first: 1000
+    skip: $skip
+  ) {
+    id
   }
 }
