@@ -4,9 +4,23 @@ pragma solidity 0.7.5;
 import "./external/IBalancer.sol";
 import "./external/IUniswap.sol";
 import "./external/IERC20.sol";
+import "./external/IWeth.sol";
 
 contract Arbrito is IUniswapPairCallee {
   enum Borrow { Token0, Token1 }
+
+  address[] public tokens;
+  mapping(address => uint256) public balances;
+
+  address immutable WETH_ADDRESS;
+  address immutable UNISWAP_ROUTER_ADDRESS;
+  address payable immutable OWNER;
+
+  constructor(address weth_address, address uniswap_router_address) {
+    UNISWAP_ROUTER_ADDRESS = uniswap_router_address;
+    WETH_ADDRESS = weth_address;
+    OWNER = msg.sender;
+  }
 
   function perform(
     Borrow borrow,
@@ -75,15 +89,22 @@ contract Arbrito is IUniswapPairCallee {
 
     allow(sender, balancerPoolAddress, tokenTrade, amountTrade);
 
-    IBalancerPool(balancerPoolAddress).swapExactAmountIn(
-      tokenTrade,
-      amountTrade,
-      tokenPayback,
-      amountPayback,
-      uint256(-1)
-    );
+    (uint256 balancerAmountOut, ) =
+      IBalancerPool(balancerPoolAddress).swapExactAmountIn(
+        tokenTrade,
+        amountTrade,
+        tokenPayback,
+        amountPayback,
+        uint256(-1)
+      );
 
     require(IERC20(tokenPayback).transfer(msg.sender, amountPayback), "Payback failed");
+
+    if (balances[tokenPayback] == 0) {
+      tokens.push(tokenPayback);
+    }
+
+    balances[tokenPayback] += balancerAmountOut - amountPayback;
   }
 
   function allow(
@@ -105,5 +126,32 @@ contract Arbrito is IUniswapPairCallee {
     uint256 numerator = reserveIn * amountOut * 1000;
     uint256 denominator = (reserveOut - amountOut) * 997;
     return numerator / denominator + 1;
+  }
+
+  function withdraw() external {
+    address[] memory path = new address[](2);
+    address me = address(this);
+    path[1] = WETH_ADDRESS;
+
+    uint256 weth = 0;
+    for (uint256 i = 0; i < tokens.length; i++) {
+      address token = tokens[i];
+      path[0] = token;
+
+      weth += IUniswapRouter(UNISWAP_ROUTER_ADDRESS).swapExactTokensForTokens(
+        balances[token],
+        0,
+        path,
+        me,
+        block.timestamp
+      )[1];
+
+      delete balances[token];
+    }
+
+    delete tokens;
+
+    IWeth(WETH_ADDRESS).withdraw(weth);
+    OWNER.transfer(weth);
   }
 }
