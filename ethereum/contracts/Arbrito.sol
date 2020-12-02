@@ -51,7 +51,7 @@ contract Arbrito is IUniswapPairCallee {
   }
 
   function uniswapV2Call(
-    address, // sender
+    address sender,
     uint256 amount0,
     uint256 amount1,
     bytes calldata data
@@ -81,7 +81,7 @@ contract Arbrito is IUniswapPairCallee {
       amountPayback = calculateUniswapPayback(amountTrade, reserve0, reserve1);
     }
 
-    IERC20(tokenTrade).approve(balancerPoolAddress, amountTrade);
+    allow(sender, balancerPoolAddress, tokenTrade, amountTrade);
 
     (uint256 balancerAmountOut, ) =
       IBalancerPool(balancerPoolAddress).swapExactAmountIn(
@@ -98,6 +98,17 @@ contract Arbrito is IUniswapPairCallee {
       IERC20(tokenPayback).transfer(ownerAddress, balancerAmountOut - amountPayback),
       "Sender transfer failed"
     );
+  }
+
+  function allow(
+    address sender,
+    address balancer,
+    address tokenTrade,
+    uint256 amountTrade
+  ) internal {
+    if (IERC20(tokenTrade).allowance(sender, balancer) < amountTrade) {
+      IERC20(tokenTrade).approve(balancer, uint256(-1));
+    }
   }
 
   function calculateUniswapPayback(
