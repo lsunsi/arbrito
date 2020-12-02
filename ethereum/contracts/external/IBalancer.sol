@@ -9,4 +9,6 @@ interface IBalancerPool {
     uint256 minAmountOut,
     uint256 maxPrice
   ) external returns (uint256 tokenAmountOut, uint256 spotPriceAfter);
+
+  function getBalance(address token) external view returns (uint256);
 }

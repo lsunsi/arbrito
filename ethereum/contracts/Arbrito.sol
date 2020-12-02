@@ -17,13 +17,21 @@ contract Arbrito is IUniswapPairCallee {
     address uniswapToken1,
     uint256 uniswapReserve0,
     uint256 uniswapReserve1,
-    uint256 blockNumber
+    uint256 balancerBalance0
   ) external {
-    require(block.number == blockNumber, "Delayed execution");
-
     (uint256 reserve0, uint256 reserve1, ) = IUniswapPair(uniswapPair).getReserves();
-    require(reserve0 == uniswapReserve0, "Reserve0 mismatch");
-    require(reserve1 == uniswapReserve1, "Reserve1 mismatch");
+
+    require(
+      borrow == Borrow.Token0
+        ? (reserve0 >= uniswapReserve0 && reserve1 <= uniswapReserve1)
+        : (reserve0 <= uniswapReserve0 && reserve1 >= uniswapReserve1),
+      "Uniswap reserves mismatch"
+    );
+
+    require(
+      IBalancerPool(balancerPool).getBalance(uniswapToken0) == balancerBalance0,
+      "Balancer balance0 mismatch"
+    );
 
     bytes memory payload =
       abi.encode(

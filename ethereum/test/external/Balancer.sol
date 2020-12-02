@@ -29,4 +29,8 @@ contract Balancer is IBalancerPool {
 
     return (tokenAmountOut, 0);
   }
+
+  function getBalance(address token) external view override returns (uint256) {
+    return IERC20(token).balanceOf(address(this));
+  }
 }
