@@ -16,11 +16,8 @@ contract Arbrito is IUniswapPairCallee {
     address uniswapToken0,
     address uniswapToken1,
     uint256 uniswapReserve0,
-    uint256 uniswapReserve1,
-    uint256 blockNumber
+    uint256 uniswapReserve1
   ) external {
-    require(block.number == blockNumber, "Delayed execution");
-
     (uint256 reserve0, uint256 reserve1, ) = IUniswapPair(uniswapPair).getReserves();
     require(reserve0 == uniswapReserve0, "Reserve0 mismatch");
     require(reserve1 == uniswapReserve1, "Reserve1 mismatch");

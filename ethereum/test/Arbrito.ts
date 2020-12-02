@@ -41,8 +41,7 @@ contract("Arbrito", ([owner]) => {
       token0.address,
       token1.address,
       uniswapReserve0,
-      uniswapReserve1,
-      (await web3.eth.getBlockNumber()) + 1
+      uniswapReserve1
     );
 
     expect((await token0.balanceOf(uniswap.address)).toString()).equal(
@@ -90,8 +89,7 @@ contract("Arbrito", ([owner]) => {
       token0.address,
       token1.address,
       uniswapReserve0,
-      uniswapReserve1,
-      (await web3.eth.getBlockNumber()) + 1
+      uniswapReserve1
     );
 
     expect((await token1.balanceOf(uniswap.address)).toString()).equal(
@@ -141,37 +139,13 @@ contract("Arbrito", ([owner]) => {
         token0.address,
         token1.address,
         uniswapReserve0,
-        uniswapReserve1,
-        (await web3.eth.getBlockNumber()) + 1
+        uniswapReserve1
       );
     } catch (e) {
       error = e;
     }
 
     expect(error).match(/Insufficient amount out/);
-  });
-
-  it("reverts when the block is mined in delayed block", async () => {
-    const [arbrito, uniswap, balancer, token0, token1] = await deployContracts();
-
-    let error;
-    try {
-      await arbrito.perform(
-        1,
-        web3.utils.toWei("6", "ether"),
-        uniswap.address,
-        balancer.address,
-        token0.address,
-        token1.address,
-        0,
-        0,
-        await web3.eth.getBlockNumber()
-      );
-    } catch (e) {
-      error = e;
-    }
-
-    expect(error).match(/Delayed execution/);
   });
 
   it("reverts if the uniswap reserves are different from expected", async () => {
@@ -187,8 +161,7 @@ contract("Arbrito", ([owner]) => {
         token0.address,
         token1.address,
         1,
-        0,
-        (await web3.eth.getBlockNumber()) + 1
+        0
       );
     } catch (e) {
       expect(e).match(/Reserve0 mismatch/);
@@ -204,8 +177,7 @@ contract("Arbrito", ([owner]) => {
         token0.address,
         token1.address,
         0,
-        1,
-        (await web3.eth.getBlockNumber()) + 1
+        1
       );
     } catch (e) {
       expect(e).match(/Reserve1 mismatch/);
@@ -227,8 +199,7 @@ contract("Arbrito", ([owner]) => {
       "0xdfc14d2af169b0d36c4eff567ada9b2e0cae044f",
       "0x7c90a3cd7ec80dd2f633ed562480abbeed3be546",
       "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9",
-      "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-      (await web3.eth.getBlockNumber()) + 1
+      "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
     );
 
     expect((await aave.balanceOf(arbrito.address)).toString()).equal("0");
