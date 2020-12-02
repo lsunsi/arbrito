@@ -16,7 +16,8 @@ contract Arbrito is IUniswapPairCallee {
     address uniswapToken0,
     address uniswapToken1,
     uint256 uniswapReserve0,
-    uint256 uniswapReserve1
+    uint256 uniswapReserve1,
+    uint256 balancerBalance0
   ) external {
     (uint256 reserve0, uint256 reserve1, ) = IUniswapPair(uniswapPair).getReserves();
 
@@ -25,6 +26,11 @@ contract Arbrito is IUniswapPairCallee {
         ? (reserve0 >= uniswapReserve0 && reserve1 <= uniswapReserve1)
         : (reserve0 <= uniswapReserve0 && reserve1 >= uniswapReserve1),
       "Uniswap reserves mismatch"
+    );
+
+    require(
+      IBalancerPool(balancerPool).getBalance(uniswapToken0) == balancerBalance0,
+      "Balancer balance0 mismatch"
     );
 
     bytes memory payload =
