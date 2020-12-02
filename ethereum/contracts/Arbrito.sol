@@ -19,8 +19,13 @@ contract Arbrito is IUniswapPairCallee {
     uint256 uniswapReserve1
   ) external {
     (uint256 reserve0, uint256 reserve1, ) = IUniswapPair(uniswapPair).getReserves();
-    require(reserve0 == uniswapReserve0, "Reserve0 mismatch");
-    require(reserve1 == uniswapReserve1, "Reserve1 mismatch");
+
+    require(
+      borrow == Borrow.Token0
+        ? (reserve0 >= uniswapReserve0 && reserve1 <= uniswapReserve1)
+        : (reserve0 <= uniswapReserve0 && reserve1 >= uniswapReserve1),
+      "Uniswap reserves mismatch"
+    );
 
     bytes memory payload =
       abi.encode(

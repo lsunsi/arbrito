@@ -148,24 +148,28 @@ contract("Arbrito", ([owner]) => {
     expect(error).match(/Insufficient amount out/);
   });
 
-  it("reverts if the uniswap reserves are different from expected", async () => {
+  it("reverts if the uniswap reserves are worse than expected", async () => {
     const [arbrito, uniswap, balancer, token0, token1] = await deployContracts();
+
+    await token0.mint(uniswap.address, 2);
+    await token1.mint(uniswap.address, 2);
+    await uniswap.refreshReserves();
     let count = 0;
 
     try {
       await arbrito.perform(
-        1,
+        0,
         web3.utils.toWei("6", "ether"),
         uniswap.address,
         balancer.address,
         token0.address,
         token1.address,
-        1,
-        0
+        3,
+        1
       );
     } catch (e) {
-      expect(e).match(/Reserve0 mismatch/);
-      count += 1;
+      expect(e).match(/Uniswap reserves mismatch/);
+      count++;
     }
 
     try {
@@ -176,15 +180,47 @@ contract("Arbrito", ([owner]) => {
         balancer.address,
         token0.address,
         token1.address,
+        1,
+        3
+      );
+    } catch (e) {
+      expect(e).match(/Uniswap reserves mismatch/);
+      count++;
+    }
+
+    try {
+      await arbrito.perform(
         0,
+        web3.utils.toWei("6", "ether"),
+        uniswap.address,
+        balancer.address,
+        token0.address,
+        token1.address,
+        1,
         1
       );
     } catch (e) {
-      expect(e).match(/Reserve1 mismatch/);
-      count += 1;
+      expect(e).match(/Uniswap reserves mismatch/);
+      count++;
     }
 
-    expect(count).eq(2);
+    try {
+      await arbrito.perform(
+        0,
+        web3.utils.toWei("6", "ether"),
+        uniswap.address,
+        balancer.address,
+        token0.address,
+        token1.address,
+        3,
+        3
+      );
+    } catch (e) {
+      expect(e).match(/Uniswap reserves mismatch/);
+      count++;
+    }
+
+    expect(count).eq(4);
   });
 
   xit("mainets", async () => {
