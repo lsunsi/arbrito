@@ -262,6 +262,67 @@ contract("Arbrito", ([owner]) => {
     expect(error).match(/Balancer balance0 mismatch/);
   });
 
+  it("increase allowance only when needed", async () => {
+    const [arbrito, uniswap, balancer, token0, token1] = await deployContracts();
+
+    expect((await token0.allowance(arbrito.address, balancer.address)).toString()).eq("0");
+
+    const uniswapReserve0 = web3.utils.toWei("10", "ether");
+    const uniswapReserve1 = web3.utils.toWei("10", "ether");
+
+    const balancerBalance0 = web3.utils.toWei("10", "ether");
+    const balancerBalance1 = web3.utils.toWei("30", "ether");
+
+    await token0.mint(uniswap.address, uniswapReserve0);
+    await token1.mint(uniswap.address, uniswapReserve1);
+    await uniswap.refreshReserves();
+
+    await token0.mint(balancer.address, balancerBalance0);
+    await token1.mint(balancer.address, balancerBalance1);
+
+    await arbrito.perform(
+      0,
+      web3.utils.toWei("1", "ether"),
+      uniswap.address,
+      balancer.address,
+      token0.address,
+      token1.address,
+      uniswapReserve0,
+      uniswapReserve1,
+      balancerBalance0
+    );
+
+    let token0diff = web3.utils.toBN(uniswapReserve0).sub(await token0.balanceOf(uniswap.address));
+    let allowance = web3.utils
+      .toBN("115792089237316195423570985008687907853269984665640564039457584007913129639935")
+      .sub(token0diff);
+
+    expect((await token0.allowance(arbrito.address, balancer.address)).toString()).equal(
+      allowance.toString()
+    );
+
+    await token0.mint(uniswap.address, token0diff);
+    await uniswap.refreshReserves();
+
+    await arbrito.perform(
+      0,
+      web3.utils.toWei("1", "ether"),
+      uniswap.address,
+      balancer.address,
+      token0.address,
+      token1.address,
+      uniswapReserve0,
+      await token1.balanceOf(uniswap.address),
+      await token0.balanceOf(balancer.address)
+    );
+
+    expect((await token0.allowance(arbrito.address, balancer.address)).toString()).equal(
+      allowance
+        .sub(web3.utils.toBN(uniswapReserve0).sub(await token0.balanceOf(uniswap.address)))
+        .toString()
+    );
+  });
+
   xit("mainets", async () => {
     const [arbrito] = await deployContracts();
 
