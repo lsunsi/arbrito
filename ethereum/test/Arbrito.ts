@@ -61,10 +61,7 @@ contract("Arbrito", ([owner]) => {
     );
 
     expect((await token0.balanceOf(arbrito.address)).toString()).equal("0");
-    expect((await token1.balanceOf(arbrito.address)).toString()).equal("0");
-
-    expect((await token0.balanceOf(owner)).toString()).equal("0");
-    expect((await token1.balanceOf(owner)).toString()).equal(
+    expect((await token1.balanceOf(arbrito.address)).toString()).equal(
       web3.utils
         .toBN(web3.utils.toWei("3", "ether"))
         .sub(web3.utils.toBN("1114454474534715257"))
@@ -113,10 +110,7 @@ contract("Arbrito", ([owner]) => {
     );
 
     expect((await token1.balanceOf(arbrito.address)).toString()).equal("0");
-    expect((await token0.balanceOf(arbrito.address)).toString()).equal("0");
-
-    expect((await token1.balanceOf(owner)).toString()).equal("0");
-    expect((await token0.balanceOf(owner)).toString()).equal(
+    expect((await token0.balanceOf(arbrito.address)).toString()).equal(
       web3.utils
         .toBN(web3.utils.toWei("3", "ether"))
         .sub(web3.utils.toBN("1114454474534715257"))

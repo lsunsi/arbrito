@@ -34,14 +34,7 @@ contract Arbrito is IUniswapPairCallee {
     );
 
     bytes memory payload =
-      abi.encode(
-        balancerPool,
-        msg.sender,
-        uniswapToken0,
-        uniswapToken1,
-        uniswapReserve0,
-        uniswapReserve1
-      );
+      abi.encode(balancerPool, uniswapToken0, uniswapToken1, uniswapReserve0, uniswapReserve1);
 
     if (borrow == Borrow.Token0) {
       IUniswapPair(uniswapPair).swap(amount, 0, address(this), payload);
@@ -58,12 +51,11 @@ contract Arbrito is IUniswapPairCallee {
   ) external override {
     (
       address balancerPoolAddress,
-      address ownerAddress,
       address token0,
       address token1,
       uint256 reserve0,
       uint256 reserve1
-    ) = abi.decode(data, (address, address, address, address, uint256, uint256));
+    ) = abi.decode(data, (address, address, address, uint256, uint256));
 
     uint256 amountTrade;
     uint256 amountPayback;
@@ -83,21 +75,15 @@ contract Arbrito is IUniswapPairCallee {
 
     allow(sender, balancerPoolAddress, tokenTrade, amountTrade);
 
-    (uint256 balancerAmountOut, ) =
-      IBalancerPool(balancerPoolAddress).swapExactAmountIn(
-        tokenTrade,
-        amountTrade,
-        tokenPayback,
-        amountPayback,
-        uint256(-1)
-      );
+    IBalancerPool(balancerPoolAddress).swapExactAmountIn(
+      tokenTrade,
+      amountTrade,
+      tokenPayback,
+      amountPayback,
+      uint256(-1)
+    );
 
     require(IERC20(tokenPayback).transfer(msg.sender, amountPayback), "Payback failed");
-
-    require(
-      IERC20(tokenPayback).transfer(ownerAddress, balancerAmountOut - amountPayback),
-      "Sender transfer failed"
-    );
   }
 
   function allow(
