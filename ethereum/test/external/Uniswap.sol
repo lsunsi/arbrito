@@ -4,7 +4,7 @@ pragma solidity 0.7.5;
 import "./IERC20.sol";
 import "../../contracts/external/IUniswap.sol";
 
-contract Uniswap is IUniswapPair {
+contract UniswapPair is IUniswapPair {
   address token0address;
   address token1address;
   uint112 reserve0;
@@ -28,7 +28,7 @@ contract Uniswap is IUniswapPair {
     return (reserve0, reserve1, 0);
   }
 
-  function refreshReserves() external {
+  function refreshReserves() public {
     address me = address(this);
     reserve0 = uint112(IERC20(token0address).balanceOf(me));
     reserve1 = uint112(IERC20(token1address).balanceOf(me));
@@ -40,36 +40,36 @@ contract Uniswap is IUniswapPair {
     address receiver,
     bytes calldata payload
   ) external override {
-    require(payload.length != 0, "Unsupported payload");
     require(
       (amount0 == 0 && amount1 != 0) || (amount0 != 0 && amount1 == 0),
-      "Unsupported amounts"
+      "unsupported amounts"
     );
 
     IERC20 tokenLent;
     IERC20 tokenPayback;
     uint256 amountLent;
+    uint256 tokenPaybackBalance;
 
     if (amount0 != 0) {
       tokenLent = IERC20(token0address);
       tokenPayback = IERC20(token1address);
       amountLent = amount0;
+      tokenPaybackBalance = reserve1;
       require(IERC20(token0address).transfer(receiver, amount0), "loan failed");
     } else {
       tokenLent = IERC20(token1address);
       tokenPayback = IERC20(token0address);
       amountLent = amount1;
+      tokenPaybackBalance = reserve0;
       require(IERC20(token1address).transfer(receiver, amount1), "loan failed");
     }
 
     address me = address(this);
     uint256 tokenLentBalance = tokenLent.balanceOf(me);
-    uint256 tokenPaybackBalance = tokenPayback.balanceOf(me);
 
-    IUniswapPairCallee(msg.sender).uniswapV2Call(msg.sender, amount0, amount1, payload);
-
-    reserve0 -= uint112(amount0);
-    reserve1 -= uint112(amount1);
+    if (payload.length > 0) {
+      IUniswapPairCallee(msg.sender).uniswapV2Call(msg.sender, amount0, amount1, payload);
+    }
 
     require(tokenLent.balanceOf(me) == tokenLentBalance, "unsupported payback");
 
@@ -84,5 +84,64 @@ contract Uniswap is IUniswapPair {
         (tokenLentBalance + amountLent) * tokenPaybackBalance * 1000,
       "payback mismatch"
     );
+
+    refreshReserves();
+  }
+}
+
+contract UniswapRouter is IUniswapRouter {
+  address immutable weth;
+  address immutable token;
+  address immutable pair;
+
+  constructor(
+    address _weth,
+    address _token,
+    address _pair
+  ) {
+    weth = _weth;
+    token = _token;
+    pair = _pair;
+  }
+
+  function swapExactTokensForTokens(
+    uint256 amountIn,
+    uint256 amountOutMin,
+    address[] calldata path,
+    address to,
+    uint256 deadline
+  ) external override returns (uint256[] memory) {
+    require(amountOutMin == 0, "amountOutMin must be 0");
+    require(deadline == block.timestamp, "deadline must be block.timestamp");
+    require(path.length == 2, "path.length must be 2");
+
+    uint256[] memory amounts = new uint256[](2);
+    amounts[0] = amountIn;
+
+    (uint112 reserve0, uint112 reserve1, ) = UniswapPair(pair).getReserves();
+
+    if (path[0] == weth && path[1] == token) {
+      amounts[1] = getAmountOut(amountIn, reserve0, reserve1);
+
+      IERC20(weth).transferFrom(msg.sender, pair, amountIn);
+      UniswapPair(pair).swap(0, amounts[1], to, new bytes(0));
+    } else if (path[0] == token && path[1] == weth) {
+      amounts[1] = getAmountOut(amountIn, reserve1, reserve0);
+
+      IERC20(token).transferFrom(msg.sender, pair, amountIn);
+      UniswapPair(pair).swap(amounts[1], 0, to, new bytes(0));
+    } else {
+      revert("invalid path");
+    }
+
+    return amounts;
+  }
+
+  function getAmountOut(
+    uint256 amountIn,
+    uint112 reserveIn,
+    uint112 reserveOut
+  ) internal pure returns (uint256) {
+    return (amountIn * reserveOut * 997) / (reserveIn * 1000 + amountIn * 997);
   }
 }

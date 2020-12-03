@@ -16,11 +16,13 @@ contract Arbrito is IUniswapPairCallee {
   address immutable UNISWAP_ROUTER_ADDRESS;
   address payable immutable OWNER;
 
-  constructor(address weth_address, address uniswap_router_address) {
-    UNISWAP_ROUTER_ADDRESS = uniswap_router_address;
-    WETH_ADDRESS = weth_address;
+  constructor(address wethAddress, address uniswapRouterAddress) {
+    UNISWAP_ROUTER_ADDRESS = uniswapRouterAddress;
+    WETH_ADDRESS = wethAddress;
     OWNER = msg.sender;
   }
+
+  receive() external payable {}
 
   function perform(
     Borrow borrow,
@@ -108,13 +110,13 @@ contract Arbrito is IUniswapPairCallee {
   }
 
   function allow(
-    address sender,
-    address balancer,
-    address tokenTrade,
-    uint256 amountTrade
+    address owner,
+    address spender,
+    address token,
+    uint256 amount
   ) internal {
-    if (IERC20(tokenTrade).allowance(sender, balancer) < amountTrade) {
-      IERC20(tokenTrade).approve(balancer, uint256(-1));
+    if (IERC20(token).allowance(owner, spender) < amount) {
+      IERC20(token).approve(spender, uint256(-1));
     }
   }
 
@@ -136,15 +138,22 @@ contract Arbrito is IUniswapPairCallee {
     uint256 weth = 0;
     for (uint256 i = 0; i < tokens.length; i++) {
       address token = tokens[i];
-      path[0] = token;
 
-      weth += IUniswapRouter(UNISWAP_ROUTER_ADDRESS).swapExactTokensForTokens(
-        balances[token],
-        0,
-        path,
-        me,
-        block.timestamp
-      )[1];
+      if (token == WETH_ADDRESS) {
+        weth += balances[token];
+      } else {
+        path[0] = token;
+
+        allow(me, UNISWAP_ROUTER_ADDRESS, token, balances[token]);
+
+        weth += IUniswapRouter(UNISWAP_ROUTER_ADDRESS).swapExactTokensForTokens(
+          balances[token],
+          0,
+          path,
+          me,
+          block.timestamp
+        )[1];
+      }
 
       delete balances[token];
     }

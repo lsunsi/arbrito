@@ -4,7 +4,7 @@ pragma solidity 0.7.5;
 import "./IERC20.sol";
 import "../../contracts/external/IBalancer.sol";
 
-contract Balancer is IBalancerPool {
+contract BalancerPool is IBalancerPool {
   function swapExactAmountIn(
     address _tokenIn,
     uint256 _tokenAmountIn,
