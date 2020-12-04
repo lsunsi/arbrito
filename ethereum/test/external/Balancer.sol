@@ -5,6 +5,8 @@ import "./IERC20.sol";
 import "../../contracts/external/IBalancer.sol";
 
 contract BalancerPool is IBalancerPool {
+  uint256 constant BONE = 10**18;
+
   function swapExactAmountIn(
     address _tokenIn,
     uint256 _tokenAmountIn,
@@ -18,9 +20,8 @@ contract BalancerPool is IBalancerPool {
     IERC20 tokenIn = IERC20(_tokenIn);
     IERC20 tokenOut = IERC20(_tokenOut);
 
-    uint256 tokenAmountOut = (10**18 * tokenOut.balanceOf(me) * _tokenAmountIn);
-    tokenAmountOut /= (10**18 * tokenIn.balanceOf(me));
-
+    uint256 tokenAmountOut =
+      calcAmountOutGivenIn(_tokenAmountIn, tokenIn.balanceOf(me), tokenOut.balanceOf(me), 0);
     require(tokenAmountOut > _minAmountOut, "Insufficient amount out");
 
     require(tokenIn.transferFrom(msg.sender, me, _tokenAmountIn), "Transfer in failed");
@@ -32,5 +33,22 @@ contract BalancerPool is IBalancerPool {
 
   function getBalance(address token) external view override returns (uint256) {
     return IERC20(token).balanceOf(address(this));
+  }
+
+  function bmul(uint256 a, uint256 b) internal pure returns (uint256) {
+    return (a * b + BONE / 2) / BONE;
+  }
+
+  function bdiv(uint256 a, uint256 b) internal pure returns (uint256) {
+    return (a * BONE + b / 2) / b;
+  }
+
+  function calcAmountOutGivenIn(
+    uint256 a,
+    uint256 bi,
+    uint256 bo,
+    uint256 s
+  ) internal pure returns (uint256) {
+    return bmul(bo, BONE - bdiv(bi, bi + bmul(a, BONE - s)));
   }
 }

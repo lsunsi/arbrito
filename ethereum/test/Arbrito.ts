@@ -62,16 +62,11 @@ contract("Arbrito", ([owner, other]) => {
     expect((await weth.balanceOf(balancerPool.address)).toString()).equal(
       web3.utils.toWei("11", "ether")
     );
-    expect((await token.balanceOf(balancerPool.address)).toString()).equal(
-      web3.utils.toWei("27", "ether")
-    );
+    expect((await token.balanceOf(balancerPool.address)).toString()).equal("27272727272727272730");
 
     expect((await weth.balanceOf(arbrito.address)).toString()).equal("0");
     expect((await token.balanceOf(arbrito.address)).toString()).equal(
-      web3.utils
-        .toBN(web3.utils.toWei("3", "ether"))
-        .sub(web3.utils.toBN("1114454474534715257"))
-        .toString()
+      web3.utils.toBN("2727272727272727270").sub(web3.utils.toBN("1114454474534715257")).toString()
     );
   });
 
@@ -111,16 +106,11 @@ contract("Arbrito", ([owner, other]) => {
     expect((await token.balanceOf(balancerPool.address)).toString()).equal(
       web3.utils.toWei("11", "ether")
     );
-    expect((await weth.balanceOf(balancerPool.address)).toString()).equal(
-      web3.utils.toWei("27", "ether")
-    );
+    expect((await weth.balanceOf(balancerPool.address)).toString()).equal("27272727272727272730");
 
     expect((await token.balanceOf(arbrito.address)).toString()).equal("0");
     expect((await weth.balanceOf(arbrito.address)).toString()).equal(
-      web3.utils
-        .toBN(web3.utils.toWei("3", "ether"))
-        .sub(web3.utils.toBN("1114454474534715257"))
-        .toString()
+      web3.utils.toBN("2727272727272727270").sub(web3.utils.toBN("1114454474534715257")).toString()
     );
   });
 
