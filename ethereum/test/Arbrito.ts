@@ -382,26 +382,39 @@ contract("Arbrito", ([owner, other]) => {
   });
 
   xit("mainets", async () => {
-    const { arbrito } = await deployContracts();
+    const arbrito = await Arbrito.new(
+      "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+      "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"
+    );
 
-    const aave = await ERC20.at("0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9");
-    const weth = await ERC20.at("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2");
+    const token0 = await ERC20.at("0xc011a73ee8576fb46f5e1c5751ca3b9fe0af2a6f");
+    const token1 = await ERC20.at("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2");
+
+    const uniswapPairAddress = "0x43ae24960e5534731fc831386c07755a2dc33d47";
+    const balancerPoolAddress = "0x1373e57f764a7944bdd7a4bd5ca3007d496934da";
+    const uniswapReserve0 = "711050248732125337962178";
+    const uniswapReserve1 = "6416406142955321706189";
+    const balancerBalance0 = "2011899504160281443201";
 
     await arbrito.perform(
       1,
-      web3.utils.toWei("6", "ether"),
-      "0xdfc14d2af169b0d36c4eff567ada9b2e0cae044f",
-      "0x7c90a3cd7ec80dd2f633ed562480abbeed3be546",
-      "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9",
-      "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+      web3.utils.toWei("0.217044074567221250", "ether"),
+      uniswapPairAddress,
+      balancerPoolAddress,
+      token0.address,
+      token1.address,
+      uniswapReserve0,
+      uniswapReserve1,
+      balancerBalance0
     );
 
-    expect((await aave.balanceOf(arbrito.address)).toString()).equal("0");
-    expect((await weth.balanceOf(arbrito.address)).toString()).equal("0");
+    const ownerBalance1 = web3.utils.toBN(await web3.eth.getBalance(owner));
+    await arbrito.withdraw({ from: other });
+    const ownerBalance2 = web3.utils.toBN(await web3.eth.getBalance(owner));
 
-    expect((await aave.balanceOf(owner)).toString()).equal(
-      web3.utils.toWei("0.092600543527636767", "ether")
-    );
-    expect((await weth.balanceOf(owner)).toString()).equal("0");
+    expect((await token0.balanceOf(arbrito.address)).toString()).equal("0");
+    expect((await token1.balanceOf(arbrito.address)).toString()).equal("0");
+
+    expect(ownerBalance2.sub(ownerBalance1).toString()).equal("2674630331710351");
   });
 });
