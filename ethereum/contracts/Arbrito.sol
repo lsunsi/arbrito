@@ -50,7 +50,7 @@ contract Arbrito is IUniswapPairCallee {
     );
 
     bytes memory payload =
-      abi.encode(balancerPool, uniswapToken0, uniswapToken1, uniswapReserve0, uniswapReserve1);
+      abi.encode(balancerPool, uniswapToken0, uniswapToken1, reserve0, reserve1);
 
     if (borrow == Borrow.Token0) {
       IUniswapPair(uniswapPair).swap(amount, 0, address(this), payload);
