@@ -16,7 +16,7 @@ use web3::{
 };
 
 const WETH_ADDRESS: &str = "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
-const ARBRITO_ADDRESS: &str = "e96B6680a8ef1D8d561171948226bc3A133fA56D";
+const ARBRITO_ADDRESS: &str = "0aF72DF780386476558BD8E8EEB5c821209bfE95";
 const EXECUTOR_ADDRESS: &str = "Af43007aD675D6C72E96905cf4d8acB58ba0E041";
 const WEB3_ENDPOINT: &str = "ws://127.0.0.1:8546";
 const TARGET_NET_PROFIT: u128 = 10_000_000_000_000_000; // 0.01 eth
@@ -339,6 +339,15 @@ async fn execute(
         .await
         .expect("failed getting reserves");
 
+    let balance0 = attempt
+        .pair
+        .balancer
+        .get_balance(attempt.pair.token0.address)
+        .block(BlockId::Number(BlockNumber::Number(attempt.block_number)))
+        .call()
+        .await
+        .expect("failed getting balances");
+
     let tx = arbrito
         .perform(
             borrow,
@@ -349,7 +358,7 @@ async fn execute(
             attempt.pair.token1.address,
             U256::from(reserve0),
             U256::from(reserve1),
-            U256::from(attempt.block_number.as_u64() + 1),
+            balance0,
         )
         .from(Account::Locked(
             from_address,
