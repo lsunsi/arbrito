@@ -4,9 +4,25 @@ pragma solidity 0.7.5;
 import "./external/IBalancer.sol";
 import "./external/IUniswap.sol";
 import "./external/IERC20.sol";
+import "./external/IWeth.sol";
 
 contract Arbrito is IUniswapPairCallee {
   enum Borrow { Token0, Token1 }
+
+  address[] public tokens;
+  mapping(address => uint256) public balances;
+
+  address immutable WETH_ADDRESS;
+  address immutable UNISWAP_ROUTER_ADDRESS;
+  address payable immutable OWNER;
+
+  constructor(address wethAddress, address uniswapRouterAddress) {
+    UNISWAP_ROUTER_ADDRESS = uniswapRouterAddress;
+    WETH_ADDRESS = wethAddress;
+    OWNER = msg.sender;
+  }
+
+  receive() external payable {}
 
   function perform(
     Borrow borrow,
@@ -34,14 +50,7 @@ contract Arbrito is IUniswapPairCallee {
     );
 
     bytes memory payload =
-      abi.encode(
-        balancerPool,
-        msg.sender,
-        uniswapToken0,
-        uniswapToken1,
-        uniswapReserve0,
-        uniswapReserve1
-      );
+      abi.encode(balancerPool, uniswapToken0, uniswapToken1, reserve0, reserve1);
 
     if (borrow == Borrow.Token0) {
       IUniswapPair(uniswapPair).swap(amount, 0, address(this), payload);
@@ -58,12 +67,11 @@ contract Arbrito is IUniswapPairCallee {
   ) external override {
     (
       address balancerPoolAddress,
-      address ownerAddress,
       address token0,
       address token1,
       uint256 reserve0,
       uint256 reserve1
-    ) = abi.decode(data, (address, address, address, address, uint256, uint256));
+    ) = abi.decode(data, (address, address, address, uint256, uint256));
 
     uint256 amountTrade;
     uint256 amountPayback;
@@ -94,20 +102,21 @@ contract Arbrito is IUniswapPairCallee {
 
     require(IERC20(tokenPayback).transfer(msg.sender, amountPayback), "Payback failed");
 
-    require(
-      IERC20(tokenPayback).transfer(ownerAddress, balancerAmountOut - amountPayback),
-      "Sender transfer failed"
-    );
+    if (balances[tokenPayback] == 0) {
+      tokens.push(tokenPayback);
+    }
+
+    balances[tokenPayback] += balancerAmountOut - amountPayback;
   }
 
   function allow(
-    address sender,
-    address balancer,
-    address tokenTrade,
-    uint256 amountTrade
+    address owner,
+    address spender,
+    address token,
+    uint256 amount
   ) internal {
-    if (IERC20(tokenTrade).allowance(sender, balancer) < amountTrade) {
-      IERC20(tokenTrade).approve(balancer, uint256(-1));
+    if (IERC20(token).allowance(owner, spender) < amount) {
+      IERC20(token).approve(spender, uint256(-1));
     }
   }
 
@@ -119,5 +128,39 @@ contract Arbrito is IUniswapPairCallee {
     uint256 numerator = reserveIn * amountOut * 1000;
     uint256 denominator = (reserveOut - amountOut) * 997;
     return numerator / denominator + 1;
+  }
+
+  function withdraw() external {
+    address[] memory path = new address[](2);
+    address me = address(this);
+    path[1] = WETH_ADDRESS;
+
+    uint256 weth = 0;
+    for (uint256 i = 0; i < tokens.length; i++) {
+      address token = tokens[i];
+
+      if (token == WETH_ADDRESS) {
+        weth += balances[token];
+      } else {
+        path[0] = token;
+
+        allow(me, UNISWAP_ROUTER_ADDRESS, token, balances[token]);
+
+        weth += IUniswapRouter(UNISWAP_ROUTER_ADDRESS).swapExactTokensForTokens(
+          balances[token],
+          0,
+          path,
+          me,
+          block.timestamp
+        )[1];
+      }
+
+      delete balances[token];
+    }
+
+    delete tokens;
+
+    IWeth(WETH_ADDRESS).withdraw(weth);
+    OWNER.transfer(weth);
   }
 }

@@ -40,7 +40,7 @@ contract ERC20 is IERC20 {
     address recipient,
     uint256 amount
   ) external override returns (bool) {
-    require(allowances[sender][msg.sender] >= amount, "No allowance");
+    require(allowances[sender][msg.sender] >= amount, "no allowance");
     allowances[sender][msg.sender] -= amount;
 
     if (balances[sender] < amount) {
