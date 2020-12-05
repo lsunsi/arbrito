@@ -16,7 +16,7 @@ colored = "2.0.0"
 num-bigint = "0.3.1"
 
 [dependencies.tokio]
-version = "0.2.22"
+version = "0.2.23"
 features = ["macros", "sync"]
 
 [dependencies.serde]
