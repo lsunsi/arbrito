@@ -120,6 +120,24 @@ struct ArbritagePair {
     weth: ArbritageToken,
 }
 
+impl Block {
+    async fn fetch(web3: &Web3<WebSocket>, number: U64, addr: H160) -> Block {
+        let eth = web3.eth();
+        let (nonce, balance, gas_price) = tokio::join!(
+            eth.transaction_count(addr, Some(BlockNumber::Number(number))),
+            eth.balance(addr, Some(BlockNumber::Number(number))),
+            eth.gas_price(),
+        );
+
+        Block {
+            gas_price: gas_price.expect("failed fetching gas_price"),
+            balance: balance.expect("failed fetching balance"),
+            nonce: nonce.expect("failed fetching nonce"),
+            number,
+        }
+    }
+}
+
 impl ArbritagePair {
     async fn run(
         &self,
@@ -450,43 +468,19 @@ async fn main() {
             };
 
             log::info!("{} New block header", format_block_number(number));
+            let t = std::time::Instant::now();
 
-            let gas_price = web3
-                .eth()
-                .gas_price()
-                .await
-                .expect("failed getting gas price");
-
-            let nonce = web3
-                .eth()
-                .transaction_count(executor_address, Some(BlockNumber::Number(number)))
-                .await
-                .expect("failed fetching nonce");
-
-            let balance = web3
-                .eth()
-                .balance(executor_address, Some(BlockNumber::Number(number)))
-                .await
-                .expect("failed fetching balance");
-
-            let block = Block {
-                gas_price,
-                balance,
-                number,
-                nonce,
-            };
+            let block = Block::fetch(&web3, number, executor_address).await;
 
             let min_required_profit = config.target_weth_profit
-                + (gas_price * config.min_gas_scale) * config.expected_gas_usage;
+                + (block.gas_price * config.min_gas_scale) * config.expected_gas_usage;
 
             log::info!(
                 "{} Min required profit {} @ {} gwei",
                 format_block_number(number),
                 format_amount(&weth, min_required_profit),
-                (gas_price * config.min_gas_scale) / U256::exp10(9)
+                (block.gas_price * config.min_gas_scale) / U256::exp10(9)
             );
-
-            let t = std::time::Instant::now();
 
             let attempt_futs = arbritage_pairs.iter().map(|pair| {
                 pair.attempts(config, block).map(|attempts| {
