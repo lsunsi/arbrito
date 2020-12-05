@@ -68,6 +68,7 @@ fn format_block_number(number: U64) -> String {
 struct Block {
     number: U64,
     gas_price: U256,
+    balance: U256,
     nonce: U256,
 }
 
@@ -208,23 +209,35 @@ impl ArbritagePair {
             };
         }
 
-        let gas_price = (weth_profit - config.target_weth_profit) / config.expected_gas_usage;
+        let max_gas_price = block.balance / config.max_gas_usage;
+        let min_gas_price = block.gas_price * config.min_gas_scale;
 
-        if gas_price < (block.gas_price * config.min_gas_scale) {
+        let target_gas_price =
+            (weth_profit - config.target_weth_profit) / config.expected_gas_usage;
+
+        if target_gas_price < min_gas_price {
             ArbritageResult::GrossProfit {
                 weth_profit,
                 amount,
             }
         } else {
             ArbritageResult::NetProfit {
+                gas_price: target_gas_price.min(max_gas_price),
                 weth_profit,
-                gas_price,
                 amount,
             }
         }
     }
 
     async fn attempts(&self, config: Config, block: Block) -> Vec<ArbritageAttempt> {
+        let max_gas_price = block.balance / config.max_gas_usage;
+        let min_gas_price = block.gas_price * config.min_gas_scale;
+
+        if max_gas_price < min_gas_price {
+            log::warn!("max_gas_price < min_gas_price. attempts won't be calculated");
+            return vec![];
+        }
+
         vec![
             ArbritageAttempt {
                 pair: self.clone(),
@@ -450,8 +463,15 @@ async fn main() {
                 .await
                 .expect("failed fetching nonce");
 
+            let balance = web3
+                .eth()
+                .balance(executor_address, Some(BlockNumber::Number(number)))
+                .await
+                .expect("failed fetching balance");
+
             let block = Block {
                 gas_price,
+                balance,
                 number,
                 nonce,
             };
