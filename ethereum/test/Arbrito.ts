@@ -51,7 +51,8 @@ contract("Arbrito", ([owner, other]) => {
       token.address,
       uniswapReserve0,
       uniswapReserve1,
-      balancerBalance0
+      balancerBalance0,
+      balancerBalance1
     );
 
     expect((await weth.balanceOf(uniswapPair.address)).toString()).equal(
@@ -95,7 +96,8 @@ contract("Arbrito", ([owner, other]) => {
       token.address,
       uniswapReserve0,
       uniswapReserve1,
-      balancerBalance0
+      balancerBalance0,
+      balancerBalance1
     );
 
     expect((await token.balanceOf(uniswapPair.address)).toString()).equal(
@@ -141,7 +143,8 @@ contract("Arbrito", ([owner, other]) => {
         token.address,
         uniswapReserve0,
         uniswapReserve1,
-        balancerBalance0
+        balancerBalance0,
+        balancerBalance1
       );
     } catch (e) {
       error = e;
@@ -168,6 +171,7 @@ contract("Arbrito", ([owner, other]) => {
         token.address,
         3,
         1,
+        0,
         0
       );
     } catch (e) {
@@ -185,6 +189,7 @@ contract("Arbrito", ([owner, other]) => {
         token.address,
         1,
         3,
+        0,
         0
       );
     } catch (e) {
@@ -202,6 +207,7 @@ contract("Arbrito", ([owner, other]) => {
         token.address,
         1,
         1,
+        0,
         0
       );
     } catch (e) {
@@ -219,6 +225,7 @@ contract("Arbrito", ([owner, other]) => {
         token.address,
         3,
         3,
+        0,
         0
       );
     } catch (e) {
@@ -229,10 +236,13 @@ contract("Arbrito", ([owner, other]) => {
     expect(count).eq(4);
   });
 
-  it("reverts if the balancer balance0 is different than expected", async () => {
+  it("reverts if the balancer balances are worse than expected", async () => {
     const { arbrito, uniswapPair, balancerPool, weth, token } = await deployContracts();
 
-    let error;
+    await weth.mint(balancerPool.address, 2);
+    await token.mint(balancerPool.address, 2);
+    let count = 0;
+
     try {
       await arbrito.perform(
         0,
@@ -243,13 +253,69 @@ contract("Arbrito", ([owner, other]) => {
         token.address,
         0,
         0,
+        1,
+        3
+      );
+    } catch (e) {
+      expect(e).match(/Balancer balances mismatch/);
+      count++;
+    }
+
+    try {
+      await arbrito.perform(
+        1,
+        web3.utils.toWei("6", "ether"),
+        uniswapPair.address,
+        balancerPool.address,
+        weth.address,
+        token.address,
+        0,
+        0,
+        3,
         1
       );
     } catch (e) {
-      error = e;
+      expect(e).match(/Balancer balances mismatch/);
+      count++;
     }
 
-    expect(error).match(/Balancer balance0 mismatch/);
+    try {
+      await arbrito.perform(
+        0,
+        web3.utils.toWei("6", "ether"),
+        uniswapPair.address,
+        balancerPool.address,
+        weth.address,
+        token.address,
+        0,
+        0,
+        1,
+        1
+      );
+    } catch (e) {
+      expect(e).match(/Balancer balances mismatch/);
+      count++;
+    }
+
+    try {
+      await arbrito.perform(
+        0,
+        web3.utils.toWei("6", "ether"),
+        uniswapPair.address,
+        balancerPool.address,
+        weth.address,
+        token.address,
+        0,
+        0,
+        3,
+        3
+      );
+    } catch (e) {
+      expect(e).match(/Balancer balances mismatch/);
+      count++;
+    }
+
+    expect(count).eq(4);
   });
 
   it("increase allowance only when needed", async () => {
@@ -279,7 +345,8 @@ contract("Arbrito", ([owner, other]) => {
       token.address,
       uniswapReserve0,
       uniswapReserve1,
-      balancerBalance0
+      balancerBalance0,
+      balancerBalance1
     );
 
     let wethdiff = web3.utils.toBN(uniswapReserve0).sub(await weth.balanceOf(uniswapPair.address));
@@ -303,7 +370,8 @@ contract("Arbrito", ([owner, other]) => {
       token.address,
       uniswapReserve0,
       await token.balanceOf(uniswapPair.address),
-      await weth.balanceOf(balancerPool.address)
+      await weth.balanceOf(balancerPool.address),
+      await token.balanceOf(balancerPool.address)
     );
 
     expect((await weth.allowance(arbrito.address, balancerPool.address)).toString()).equal(
@@ -344,7 +412,8 @@ contract("Arbrito", ([owner, other]) => {
       token.address,
       uniswapReserve0,
       uniswapReserve1,
-      balancerBalance0
+      balancerBalance0,
+      balancerBalance1
     );
 
     expect((await weth.balanceOf(arbrito.address)).toString()).eq("1612818252738012013");
@@ -360,7 +429,8 @@ contract("Arbrito", ([owner, other]) => {
       token.address,
       await weth.balanceOf(uniswapPair.address),
       await token.balanceOf(uniswapPair.address),
-      await weth.balanceOf(balancerPool.address)
+      await weth.balanceOf(balancerPool.address),
+      await token.balanceOf(balancerPool.address)
     );
 
     expect((await token.balanceOf(arbrito.address)).toString()).eq("1972458627463811272");
