@@ -184,10 +184,11 @@ impl ArbritagePair {
             .await
             .expect("balancer get_swap_fee failed");
 
-        let (amount, profit) = match max_profit(U256::from(ri), U256::from(ro), bi, bo, s) {
-            None => return ArbritageResult::NotProfit,
-            Some(a) => a,
-        };
+        let (borrow_amount, payback_amount, profit) =
+            match max_profit(U256::from(ri), U256::from(ro), bi, bo, s) {
+                None => return ArbritageResult::NotProfit,
+                Some(a) => a,
+            };
 
         let weth_profit = if profit_token.address == self.weth.address {
             profit
@@ -211,19 +212,24 @@ impl ArbritagePair {
                 .await
                 .expect("uniswap_pair profit token0 failed");
 
-            let (ro, ri) = if token0address == profit_token.address {
-                (reserve1, reserve0)
+            let (mut ro, mut ri) = if token0address == profit_token.address {
+                (U256::from(reserve1), U256::from(reserve0))
             } else {
-                (reserve0, reserve1)
+                (U256::from(reserve0), U256::from(reserve1))
             };
 
-            uniswap_out_given_in(U256::from(ri), U256::from(ro), profit)
+            if profit_pair.address() == self.uniswap_pair.address() {
+                ri += payback_amount;
+                ro -= borrow_amount;
+            }
+
+            uniswap_out_given_in(ri, ro, profit)
         };
 
         if weth_profit <= config.target_weth_profit {
             return ArbritageResult::GrossProfit {
+                amount: borrow_amount,
                 weth_profit,
-                amount,
             };
         }
 
@@ -235,14 +241,14 @@ impl ArbritagePair {
 
         if target_gas_price < min_gas_price {
             ArbritageResult::GrossProfit {
+                amount: borrow_amount,
                 weth_profit,
-                amount,
             }
         } else {
             ArbritageResult::NetProfit {
                 gas_price: target_gas_price.min(max_gas_price),
+                amount: borrow_amount,
                 weth_profit,
-                amount,
             }
         }
     }
