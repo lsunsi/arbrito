@@ -23,6 +23,7 @@ const TARGET_WETH_PROFIT: u128 = 10_000_000_000_000_000; // 0.01 eth
 const EXPECTED_GAS_USAGE: u128 = 350_000;
 const MAX_GAS_USAGE: u128 = 400_000;
 const MIN_GAS_SCALE: u8 = 2;
+const MAX_GAS_SCALE: u8 = 5;
 
 fn format_amount_colored(token: &ArbritageToken, amount: U256) -> String {
     let string = format_amount(token, amount);
@@ -78,6 +79,7 @@ struct Config {
     max_gas_usage: U256,
     target_weth_profit: U256,
     min_gas_scale: u8,
+    max_gas_scale: u8,
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
@@ -233,13 +235,21 @@ impl ArbritagePair {
             };
         }
 
-        let max_gas_price = block.balance / config.max_gas_usage;
+        let max_gas_price =
+            (block.balance / config.max_gas_usage).min(block.gas_price * config.max_gas_scale);
+
         let min_gas_price = block.gas_price * config.min_gas_scale;
 
         let target_gas_price =
             (weth_profit - config.target_weth_profit) / config.expected_gas_usage;
 
-        if target_gas_price < min_gas_price {
+        if max_gas_price < min_gas_price {
+            log::warn!("max_gas_price < min_gas_price. attempt won't be correctly calculated");
+            ArbritageResult::GrossProfit {
+                amount: borrow_amount,
+                weth_profit,
+            }
+        } else if target_gas_price < min_gas_price {
             ArbritageResult::GrossProfit {
                 amount: borrow_amount,
                 weth_profit,
@@ -254,14 +264,6 @@ impl ArbritagePair {
     }
 
     async fn attempts(&self, config: Config, block: Block) -> Vec<ArbritageAttempt> {
-        let max_gas_price = block.balance / config.max_gas_usage;
-        let min_gas_price = block.gas_price * config.min_gas_scale;
-
-        if max_gas_price < min_gas_price {
-            log::warn!("max_gas_price < min_gas_price. attempts won't be calculated");
-            return vec![];
-        }
-
         vec![
             ArbritageAttempt {
                 pair: self.clone(),
@@ -421,6 +423,7 @@ async fn main() {
         expected_gas_usage: U256::from(EXPECTED_GAS_USAGE),
         max_gas_usage: U256::from(MAX_GAS_USAGE),
         min_gas_scale: MIN_GAS_SCALE,
+        max_gas_scale: MAX_GAS_SCALE,
     };
 
     let (tx, mut rx) = unbounded_channel::<ArbritageAttempt>();
