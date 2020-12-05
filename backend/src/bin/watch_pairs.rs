@@ -462,22 +462,22 @@ async fn main() {
         .await
         .expect("failed subscribing to new heads")
         .for_each(|head| async {
-            let number = match head.ok().and_then(|h| h.number) {
+            let block_number = match head.ok().and_then(|h| h.number) {
                 Some(number) => number,
                 None => return (),
             };
 
-            log::info!("{} New block header", format_block_number(number));
+            log::info!("{} New block header", format_block_number(block_number));
             let t = std::time::Instant::now();
 
-            let block = Block::fetch(&web3, number, executor_address).await;
+            let block = Block::fetch(&web3, block_number, executor_address).await;
 
             let min_required_profit = config.target_weth_profit
                 + (block.gas_price * config.min_gas_scale) * config.expected_gas_usage;
 
             log::info!(
                 "{} Min required profit {} @ {} gwei",
-                format_block_number(number),
+                format_block_number(block_number),
                 format_amount(&weth, min_required_profit),
                 (block.gas_price * config.min_gas_scale) / U256::exp10(9)
             );
@@ -502,7 +502,7 @@ async fn main() {
 
             match max_attempt.result {
                 ArbritageResult::NotProfit => {
-                    log::info!("{} No profit found", format_block_number(number))
+                    log::info!("{} No profit found", format_block_number(block_number))
                 }
                 ArbritageResult::GrossProfit {
                     weth_profit,
@@ -515,7 +515,7 @@ async fn main() {
                 } => {
                     log::info!(
                         "{} Highest profit found: borrow {} for {} profit ({})",
-                        format_block_number(number),
+                        format_block_number(block_number),
                         format_amount(&max_attempt.tokens.0, amount),
                         max_attempt.tokens.1.symbol,
                         format_amount_colored(&weth, weth_profit),
@@ -537,7 +537,7 @@ async fn main() {
 
             log::info!(
                 "{} Processed in {:.2} seconds ({} pairs | {} net + {} gross + {} not)",
-                format_block_number(number),
+                format_block_number(block_number),
                 t.elapsed().as_secs_f64(),
                 arbritage_pairs.len(),
                 net_profits_count,
