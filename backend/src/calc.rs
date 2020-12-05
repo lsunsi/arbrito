@@ -82,15 +82,14 @@ fn balancer_out_given_in(bi: U256, bo: U256, s: U256, amount: U256) -> U256 {
     bmul(bo, bone - bdiv(bi, bi + bmul(amount, bone - s)))
 }
 
-fn profit(ri: U256, ro: U256, bi: U256, bo: U256, s: U256, amount: U256) -> Option<U256> {
-    balancer_out_given_in(bi, bo, s, amount).checked_sub(uniswap_in_given_out(ri, ro, amount))
-}
+pub fn max_profit(ri: U256, ro: U256, bi: U256, bo: U256, s: U256) -> Option<(U256, U256, U256)> {
+    let borrow_amount = root(ri, ro, bi, bo, s)?;
 
-pub fn max_profit(ri: U256, ro: U256, bi: U256, bo: U256, s: U256) -> Option<(U256, U256)> {
-    let amount = root(ri, ro, bi, bo, s)?;
-    let profit = profit(ri, ro, bi, bo, s, amount)?;
+    let sell_amount = balancer_out_given_in(bi, bo, s, borrow_amount);
+    let payback_amount = uniswap_in_given_out(ri, ro, borrow_amount);
+    let profit = sell_amount.checked_sub(payback_amount)?;
 
-    Some((amount, profit))
+    Some((borrow_amount, payback_amount, profit))
 }
 
 pub fn uniswap_out_given_in(ri: U256, ro: U256, amount: U256) -> U256 {
@@ -109,7 +108,7 @@ mod test {
         let bi = U256::from(2032847980u128);
         let s = U256::from(300000000000000u128);
 
-        let (amount, profit) = max_profit(ri, ro, bi, bo, s).unwrap();
+        let (amount, _, profit) = max_profit(ri, ro, bi, bo, s).unwrap();
 
         assert_eq!(amount, U256::from(860531u128));
         assert_eq!(profit, U256::from(121209478698546u128));
