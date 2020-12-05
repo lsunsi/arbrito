@@ -15,11 +15,11 @@ use web3::{
     Web3,
 };
 
+const WEB3_ENDPOINT: &str = "ws://127.0.0.1:8546";
 const WETH_ADDRESS: &str = "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
 const ARBRITO_ADDRESS: &str = "0aF72DF780386476558BD8E8EEB5c821209bfE95";
 const EXECUTOR_ADDRESS: &str = "Af43007aD675D6C72E96905cf4d8acB58ba0E041";
-const WEB3_ENDPOINT: &str = "ws://127.0.0.1:8546";
-const TARGET_NET_PROFIT: u128 = 10_000_000_000_000_000; // 0.01 eth
+const TARGET_WETH_PROFIT: u128 = 10_000_000_000_000_000; // 0.01 eth
 const EXPECTED_GAS_USAGE: u128 = 350_000;
 const MAX_GAS_USAGE: u128 = 400_000;
 const MIN_GAS_SCALE: u8 = 2;
@@ -64,6 +64,20 @@ fn format_block_number(number: U64) -> String {
     )
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Block {
+    number: U64,
+    gas_price: U256,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Config {
+    expected_gas_usage: U256,
+    max_gas_usage: U256,
+    target_weth_profit: U256,
+    min_gas_scale: u8,
+}
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
 enum ArbritageResult {
     NotProfit,
@@ -91,11 +105,11 @@ struct ArbritageAttempt {
     pair: ArbritagePair,
     tokens: (ArbritageToken, ArbritageToken),
     result: ArbritageResult,
-    max_gas_usage: U256,
-    block_number: U64,
+    config: Config,
+    block: Block,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone)]
 struct ArbritagePair {
     uniswap_pair: UniswapPair,
     balancer: Balancer,
@@ -109,17 +123,15 @@ impl ArbritagePair {
         &self,
         borrow_token: &ArbritageToken,
         profit_token: &ArbritageToken,
-        min_gas_price: U256,
-        expected_gas_usage: U256,
-        target_net_profit: U256,
-        block_number: U64,
+        config: Config,
+        block: Block,
     ) -> ArbritageResult {
-        let block = BlockId::Number(BlockNumber::Number(block_number));
+        let block_id = BlockId::Number(BlockNumber::Number(block.number));
 
         let (reserve0, reserve1, _) = self
             .uniswap_pair
             .get_reserves()
-            .block(block)
+            .block(block_id)
             .call()
             .await
             .expect("uniswap_pair get_reserves failed");
@@ -133,21 +145,21 @@ impl ArbritagePair {
         let bi = self
             .balancer
             .get_balance(borrow_token.address)
-            .block(block)
+            .block(block_id)
             .call()
             .await
             .expect("balancer get_balance(source) failed");
         let bo = self
             .balancer
             .get_balance(profit_token.address)
-            .block(block)
+            .block(block_id)
             .call()
             .await
             .expect("balancer get_balance(target) failed");
         let s = self
             .balancer
             .get_swap_fee()
-            .block(block)
+            .block(block_id)
             .call()
             .await
             .expect("balancer get_swap_fee failed");
@@ -167,14 +179,14 @@ impl ArbritagePair {
 
             let (reserve0, reserve1, _) = profit_pair
                 .get_reserves()
-                .block(block)
+                .block(block_id)
                 .call()
                 .await
                 .expect("uniswap_pair profit get_reserves failed");
 
             let token0address = profit_pair
                 .token_0()
-                .block(block)
+                .block(block_id)
                 .call()
                 .await
                 .expect("uniswap_pair profit token0 failed");
@@ -188,16 +200,16 @@ impl ArbritagePair {
             uniswap_out_given_in(U256::from(ri), U256::from(ro), profit)
         };
 
-        if weth_profit <= target_net_profit {
+        if weth_profit <= config.target_weth_profit {
             return ArbritageResult::GrossProfit {
                 weth_profit,
                 amount,
             };
         }
 
-        let gas_price = (weth_profit - target_net_profit) / expected_gas_usage;
+        let gas_price = (weth_profit - config.target_weth_profit) / config.expected_gas_usage;
 
-        if gas_price < min_gas_price {
+        if gas_price < (block.gas_price * config.min_gas_scale) {
             ArbritageResult::GrossProfit {
                 weth_profit,
                 amount,
@@ -211,65 +223,22 @@ impl ArbritagePair {
         }
     }
 
-    async fn attempt(
-        &self,
-        borrow_token: ArbritageToken,
-        profit_token: ArbritageToken,
-        min_gas_price: U256,
-        expected_gas_usage: U256,
-        max_gas_usage: U256,
-        target_net_profit: U256,
-        block_number: U64,
-    ) -> ArbritageAttempt {
-        let result = self
-            .run(
-                &borrow_token,
-                &profit_token,
-                min_gas_price,
-                expected_gas_usage,
-                target_net_profit,
-                block_number,
-            )
-            .await;
-
-        ArbritageAttempt {
-            pair: self.clone(),
-            tokens: (borrow_token, profit_token),
-            max_gas_usage,
-            block_number,
-            result,
-        }
-    }
-
-    async fn attempts(
-        &self,
-        min_gas_price: U256,
-        expected_gas_usage: U256,
-        max_gas_usage: U256,
-        target_net_profit: U256,
-        block_number: U64,
-    ) -> Vec<ArbritageAttempt> {
+    async fn attempts(&self, config: Config, block: Block) -> Vec<ArbritageAttempt> {
         vec![
-            self.attempt(
-                self.token0.clone(),
-                self.token1.clone(),
-                min_gas_price,
-                expected_gas_usage,
-                max_gas_usage,
-                target_net_profit,
-                block_number,
-            )
-            .await,
-            self.attempt(
-                self.token1.clone(),
-                self.token0.clone(),
-                min_gas_price,
-                expected_gas_usage,
-                max_gas_usage,
-                target_net_profit,
-                block_number,
-            )
-            .await,
+            ArbritageAttempt {
+                pair: self.clone(),
+                result: self.run(&self.token0, &self.token1, config, block).await,
+                tokens: (self.token0.clone(), self.token1.clone()),
+                config,
+                block,
+            },
+            ArbritageAttempt {
+                pair: self.clone(),
+                result: self.run(&self.token1, &self.token0, config, block).await,
+                tokens: (self.token1.clone(), self.token0.clone()),
+                config,
+                block,
+            },
         ]
     }
 }
@@ -289,7 +258,7 @@ async fn execute(
         } => {
             log::info!(
                 "{} {}: borrow {} for {} profit ({}) @ {} gwei",
-                format_block_number(attempt.block_number),
+                format_block_number(attempt.block.number),
                 "Executing attempt".bold().underline(),
                 format_amount(&attempt.tokens.0, amount),
                 attempt.tokens.1.symbol,
@@ -309,7 +278,7 @@ async fn execute(
         _ => {
             log::error!(
                 "{} Cannot execute non-net-profitable attempt",
-                format_block_number(attempt.block_number)
+                format_block_number(attempt.block.number)
             );
             return;
         }
@@ -319,7 +288,7 @@ async fn execute(
         .eth()
         .transaction_count(
             from_address,
-            Some(BlockNumber::Number(attempt.block_number)),
+            Some(BlockNumber::Number(attempt.block.number)),
         )
         .await
         .expect("failed fetching nonce");
@@ -334,7 +303,7 @@ async fn execute(
         .pair
         .uniswap_pair
         .get_reserves()
-        .block(BlockId::Number(BlockNumber::Number(attempt.block_number)))
+        .block(BlockId::Number(BlockNumber::Number(attempt.block.number)))
         .call()
         .await
         .expect("failed getting reserves");
@@ -343,7 +312,7 @@ async fn execute(
         .pair
         .balancer
         .get_balance(attempt.pair.token0.address)
-        .block(BlockId::Number(BlockNumber::Number(attempt.block_number)))
+        .block(BlockId::Number(BlockNumber::Number(attempt.block.number)))
         .call()
         .await
         .expect("failed getting balances");
@@ -363,9 +332,9 @@ async fn execute(
         .from(Account::Locked(
             from_address,
             Password::new(std::env::var("ARBRITO_EXEC_PASSWORD").unwrap()),
-            Some(TransactionCondition::Block(attempt.block_number.as_u64())),
+            Some(TransactionCondition::Block(attempt.block.number.as_u64())),
         ))
-        .gas(attempt.max_gas_usage)
+        .gas(attempt.config.max_gas_usage)
         .gas_price(GasPrice::Value(gas_price))
         .confirmations(1)
         .nonce(nonce)
@@ -375,12 +344,12 @@ async fn execute(
     match tx {
         Err(_) => log::info!(
             "{} {}",
-            format_block_number(attempt.block_number),
+            format_block_number(attempt.block.number),
             "Arbitrage execution failed".red().dimmed(),
         ),
         Ok(tx) => log::info!(
             "{} {} Transaction hash {}",
-            format_block_number(attempt.block_number),
+            format_block_number(attempt.block.number),
             "Arbitrage execution succeeded!".bright_green().bold(),
             tx.hash()
         ),
@@ -419,9 +388,13 @@ async fn main() {
     let executor_address =
         H160::from_str(EXECUTOR_ADDRESS).expect("failed parsing executor address");
 
-    let target_net_profit = U256::from(TARGET_NET_PROFIT);
-    let expected_gas_usage = U256::from(EXPECTED_GAS_USAGE);
-    let max_gas_usage = U256::from(MAX_GAS_USAGE);
+    let config = Config {
+        target_weth_profit: U256::from(TARGET_WETH_PROFIT),
+        expected_gas_usage: U256::from(EXPECTED_GAS_USAGE),
+        max_gas_usage: U256::from(MAX_GAS_USAGE),
+        min_gas_scale: MIN_GAS_SCALE,
+    };
+
     let (tx, mut rx) = unbounded_channel::<ArbritageAttempt>();
 
     let executor_web3 = web3.clone();
@@ -430,7 +403,7 @@ async fn main() {
         let mut block_number = U64::from(0);
 
         while let Some(attempt) = rx.recv().await {
-            if attempt.block_number <= block_number {
+            if attempt.block.number <= block_number {
                 log::warn!(
                     "{} Dropped profitable attempt",
                     format_block_number(block_number)
@@ -438,7 +411,7 @@ async fn main() {
                 continue;
             }
 
-            block_number = attempt.block_number;
+            block_number = attempt.block.number;
 
             match lock.clone().try_lock_owned() {
                 Err(_) => log::info!(
@@ -474,40 +447,35 @@ async fn main() {
         .await
         .expect("failed subscribing to new heads")
         .for_each(|head| async {
-            let block_number = match head.ok().and_then(|h| h.number) {
+            let number = match head.ok().and_then(|h| h.number) {
                 Some(number) => number,
                 None => return (),
             };
 
-            log::info!("{} New block header", format_block_number(block_number));
+            log::info!("{} New block header", format_block_number(number));
 
-            let min_gas_price = web3
+            let gas_price = web3
                 .eth()
                 .gas_price()
                 .await
-                .expect("failed getting gas price")
-                * MIN_GAS_SCALE;
+                .expect("failed getting gas price");
 
-            let min_required_profit = target_net_profit + min_gas_price * expected_gas_usage;
+            let block = Block { gas_price, number };
+
+            let min_required_profit = config.target_weth_profit
+                + (gas_price * config.min_gas_scale) * config.expected_gas_usage;
 
             log::info!(
                 "{} Min required profit {} @ {} gwei",
-                format_block_number(block_number),
+                format_block_number(number),
                 format_amount(&weth, min_required_profit),
-                min_gas_price / U256::exp10(9)
+                (gas_price * config.min_gas_scale) / U256::exp10(9)
             );
 
             let t = std::time::Instant::now();
 
             let attempt_futs = arbritage_pairs.iter().map(|pair| {
-                pair.attempts(
-                    min_gas_price,
-                    expected_gas_usage,
-                    max_gas_usage,
-                    target_net_profit,
-                    block_number,
-                )
-                .map(|attempts| {
+                pair.attempts(config, block).map(|attempts| {
                     for attempt in &attempts {
                         if let ArbritageResult::NetProfit { .. } = attempt.result {
                             tx.send(attempt.clone()).expect("where's the executor at?");
@@ -526,7 +494,7 @@ async fn main() {
 
             match max_attempt.result {
                 ArbritageResult::NotProfit => {
-                    log::info!("{} No profit found", format_block_number(block_number))
+                    log::info!("{} No profit found", format_block_number(number))
                 }
                 ArbritageResult::GrossProfit {
                     weth_profit,
@@ -539,7 +507,7 @@ async fn main() {
                 } => {
                     log::info!(
                         "{} Highest profit found: borrow {} for {} profit ({})",
-                        format_block_number(block_number),
+                        format_block_number(number),
                         format_amount(&max_attempt.tokens.0, amount),
                         max_attempt.tokens.1.symbol,
                         format_amount_colored(&weth, weth_profit),
@@ -561,7 +529,7 @@ async fn main() {
 
             log::info!(
                 "{} Processed in {:.2} seconds ({} pairs | {} net + {} gross + {} not)",
-                format_block_number(block_number),
+                format_block_number(number),
                 t.elapsed().as_secs_f64(),
                 arbritage_pairs.len(),
                 net_profits_count,
