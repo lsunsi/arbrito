@@ -68,6 +68,7 @@ fn format_block_number(number: U64) -> String {
 struct Block {
     number: U64,
     gas_price: U256,
+    nonce: U256,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -248,7 +249,6 @@ async fn execute(
     attempt: ArbritageAttempt,
     arbrito: Arbrito,
     from_address: H160,
-    web3: Web3<WebSocket>,
 ) {
     let (amount, gas_price) = match attempt.result {
         ArbritageResult::NetProfit {
@@ -283,15 +283,6 @@ async fn execute(
             return;
         }
     };
-
-    let nonce = web3
-        .eth()
-        .transaction_count(
-            from_address,
-            Some(BlockNumber::Number(attempt.block.number)),
-        )
-        .await
-        .expect("failed fetching nonce");
 
     let borrow = if attempt.pair.token0.address == attempt.tokens.0.address {
         0
@@ -337,7 +328,7 @@ async fn execute(
         .gas(attempt.config.max_gas_usage)
         .gas_price(GasPrice::Value(gas_price))
         .confirmations(1)
-        .nonce(nonce)
+        .nonce(attempt.block.nonce)
         .send()
         .await;
 
@@ -397,7 +388,6 @@ async fn main() {
 
     let (tx, mut rx) = unbounded_channel::<ArbritageAttempt>();
 
-    let executor_web3 = web3.clone();
     tokio::spawn(async move {
         let lock = Arc::new(Mutex::new(()));
         let mut block_number = U64::from(0);
@@ -419,13 +409,7 @@ async fn main() {
                     format_block_number(block_number)
                 ),
                 Ok(guard) => {
-                    tokio::spawn(execute(
-                        guard,
-                        attempt,
-                        arbrito.clone(),
-                        executor_address,
-                        executor_web3.clone(),
-                    ));
+                    tokio::spawn(execute(guard, attempt, arbrito.clone(), executor_address));
                 }
             };
         }
@@ -460,7 +444,17 @@ async fn main() {
                 .await
                 .expect("failed getting gas price");
 
-            let block = Block { gas_price, number };
+            let nonce = web3
+                .eth()
+                .transaction_count(executor_address, Some(BlockNumber::Number(number)))
+                .await
+                .expect("failed fetching nonce");
+
+            let block = Block {
+                gas_price,
+                number,
+                nonce,
+            };
 
             let min_required_profit = config.target_weth_profit
                 + (gas_price * config.min_gas_scale) * config.expected_gas_usage;
