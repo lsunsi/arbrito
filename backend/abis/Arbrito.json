@@ -80,6 +80,11 @@
         "internalType": "uint256",
         "name": "balancerBalance0",
         "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "balancerBalance1",
+        "type": "uint256"
       }
     ],
     "name": "perform",

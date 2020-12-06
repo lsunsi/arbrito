@@ -17,7 +17,7 @@ use web3::{
 
 const WEB3_ENDPOINT: &str = "ws://127.0.0.1:8546";
 const WETH_ADDRESS: &str = "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
-const ARBRITO_ADDRESS: &str = "0aF72DF780386476558BD8E8EEB5c821209bfE95";
+const ARBRITO_ADDRESS: &str = "3FE133c5b1Aa156bF7D8Cf3699794d09Ef911ec1";
 const EXECUTOR_ADDRESS: &str = "Af43007aD675D6C72E96905cf4d8acB58ba0E041";
 const TARGET_WETH_PROFIT: u128 = 10_000_000_000_000_000; // 0.01 eth
 const EXPECTED_GAS_USAGE: u128 = 350_000;
@@ -329,23 +329,29 @@ async fn execute(
         1
     };
 
-    let (reserve0, reserve1, _) = attempt
-        .pair
-        .uniswap_pair
-        .get_reserves()
-        .block(BlockId::Number(BlockNumber::Number(attempt.block.number)))
-        .call()
-        .await
-        .expect("failed getting reserves");
-
-    let balance0 = attempt
-        .pair
-        .balancer
-        .get_balance(attempt.pair.token0.address)
-        .block(BlockId::Number(BlockNumber::Number(attempt.block.number)))
-        .call()
-        .await
-        .expect("failed getting balances");
+    let ((reserve0, reserve1, _), balance0, balance1) = tokio::join!(
+        attempt
+            .pair
+            .uniswap_pair
+            .get_reserves()
+            .block(BlockId::Number(BlockNumber::Number(attempt.block.number)))
+            .call()
+            .map(|r| r.expect("unable to get reserves")),
+        attempt
+            .pair
+            .balancer
+            .get_balance(attempt.pair.token0.address)
+            .block(BlockId::Number(BlockNumber::Number(attempt.block.number)))
+            .call()
+            .map(|r| r.expect("unable to get balance0")),
+        attempt
+            .pair
+            .balancer
+            .get_balance(attempt.pair.token1.address)
+            .block(BlockId::Number(BlockNumber::Number(attempt.block.number)))
+            .call()
+            .map(|r| r.expect("unable to get balance1"))
+    );
 
     let tx = arbrito
         .perform(
@@ -358,6 +364,7 @@ async fn execute(
             U256::from(reserve0),
             U256::from(reserve1),
             balance0,
+            balance1,
         )
         .from(Account::Locked(
             from_address,
