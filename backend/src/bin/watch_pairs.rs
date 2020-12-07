@@ -2,7 +2,7 @@ use colored::Colorize;
 use ethcontract::{Account, BlockId, BlockNumber, GasPrice, Password, TransactionCondition};
 use futures::FutureExt;
 use pooller::{
-    gen::{Arbrito, Balancer, UniswapPair},
+    gen::{Arbrito, BalancerPool, UniswapPair},
     max_profit, uniswap_out_given_in, Pairs,
 };
 use std::{collections::HashMap, str::FromStr, sync::Arc};
@@ -115,8 +115,8 @@ struct ArbritageAttempt {
 
 #[derive(Debug, Clone)]
 struct ArbritagePair {
+    balancer_pool: BalancerPool,
     uniswap_pair: UniswapPair,
-    balancer: Balancer,
     token0: ArbritageToken,
     token1: ArbritageToken,
     weth: ArbritageToken,
@@ -165,21 +165,21 @@ impl ArbritagePair {
         };
 
         let bi = self
-            .balancer
+            .balancer_pool
             .get_balance(borrow_token.address)
             .block(block_id)
             .call()
             .await
             .expect("balancer get_balance(source) failed");
         let bo = self
-            .balancer
+            .balancer_pool
             .get_balance(profit_token.address)
             .block(block_id)
             .call()
             .await
             .expect("balancer get_balance(target) failed");
         let s = self
-            .balancer
+            .balancer_pool
             .get_swap_fee()
             .block(block_id)
             .call()
@@ -310,7 +310,7 @@ async fn execute(
                 attempt.tokens.1.address
             );
             log::debug!("UniswapPool = {}", attempt.pair.uniswap_pair.address());
-            log::debug!("BalancerPool = {}", attempt.pair.balancer.address());
+            log::debug!("BalancerPool = {}", attempt.pair.balancer_pool.address());
 
             (amount, gas_price)
         }
@@ -339,14 +339,14 @@ async fn execute(
             .map(|r| r.expect("unable to get reserves")),
         attempt
             .pair
-            .balancer
+            .balancer_pool
             .get_balance(attempt.pair.token0.address)
             .block(BlockId::Number(BlockNumber::Number(attempt.block.number)))
             .call()
             .map(|r| r.expect("unable to get balance0")),
         attempt
             .pair
-            .balancer
+            .balancer_pool
             .get_balance(attempt.pair.token1.address)
             .block(BlockId::Number(BlockNumber::Number(attempt.block.number)))
             .call()
@@ -358,7 +358,7 @@ async fn execute(
             borrow,
             amount,
             attempt.pair.uniswap_pair.address(),
-            attempt.pair.balancer.address(),
+            attempt.pair.balancer_pool.address(),
             attempt.pair.token0.address,
             attempt.pair.token1.address,
             U256::from(reserve0),
@@ -467,7 +467,7 @@ async fn main() {
         .map(|pair| ArbritagePair {
             token0: tokens.get(&pair.token0).expect("unknown token").clone(),
             token1: tokens.get(&pair.token1).expect("unknown token").clone(),
-            balancer: Balancer::at(&web3, pair.balancer),
+            balancer_pool: BalancerPool::at(&web3, pair.balancer),
             uniswap_pair: UniswapPair::at(&web3, pair.uniswap),
             weth: weth.clone(),
         })
