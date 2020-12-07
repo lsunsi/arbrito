@@ -143,8 +143,8 @@ struct ArbritageAttempt {
 
 #[derive(Debug, Clone)]
 struct ArbritagePair {
-    balancer_pool: BalancerPool,
-    uniswap_pair: UniswapPair,
+    balancer_pool: H160,
+    uniswap_pair: H160,
     token0: Token,
     token1: Token,
     weth: Token,
@@ -204,12 +204,12 @@ impl ArbritagePair {
     fn run(&self, borrow_token: &Token, profit_token: &Token, ctx: &Context) -> ArbritageResult {
         let pair = ctx
             .pairs
-            .get(&self.uniswap_pair.address())
+            .get(&self.uniswap_pair)
             .expect("missing uniswap resolve");
 
         let pool = ctx
             .pools
-            .get(&self.balancer_pool.address())
+            .get(&self.balancer_pool)
             .expect("missing balancer resolve");
 
         let (ro, ri) = if pair.token0 == borrow_token.address {
@@ -255,7 +255,7 @@ impl ArbritagePair {
                 )
             };
 
-            if profit_pair_address == self.uniswap_pair.address() {
+            if profit_pair_address == self.uniswap_pair {
                 ri += payback_amount;
                 ro -= borrow_amount;
             }
@@ -323,29 +323,19 @@ async fn execute(
     attempt: ArbritageAttempt,
     arbrito: Arbrito,
     from_address: H160,
+    ctx: Context,
 ) {
     let (amount, gas_price) = match attempt.result {
         ArbritageResult::NetProfit {
-            weth_profit,
-            gas_price,
-            amount,
+            gas_price, amount, ..
         } => {
-            log::info!(
-                "{} {}: borrow {} for {} profit ({}) @ {} gwei",
-                format_block_number(attempt.block.number),
-                "Executing attempt".bold().underline(),
-                format_amount(&attempt.tokens.0, amount),
-                attempt.tokens.1.symbol,
-                format_amount_colored(&attempt.pair.weth, weth_profit),
-                gas_price / U256::exp10(9)
-            );
             log::debug!(
                 "Token addresses = {} {}",
                 attempt.tokens.0.address,
                 attempt.tokens.1.address
             );
-            log::debug!("UniswapPool = {}", attempt.pair.uniswap_pair.address());
-            log::debug!("BalancerPool = {}", attempt.pair.balancer_pool.address());
+            log::debug!("UniswapPool = {}", attempt.pair.uniswap_pair);
+            log::debug!("BalancerPool = {}", attempt.pair.balancer_pool);
 
             (amount, gas_price)
         }
@@ -364,40 +354,29 @@ async fn execute(
         1
     };
 
-    let ((reserve0, reserve1, _), balance0, balance1) = tokio::join!(
-        attempt
-            .pair
-            .uniswap_pair
-            .get_reserves()
-            .block(BlockId::Number(BlockNumber::Number(attempt.block.number)))
-            .call()
-            .map(|r| r.expect("unable to get reserves")),
-        attempt
-            .pair
-            .balancer_pool
-            .get_balance(attempt.pair.token0.address)
-            .block(BlockId::Number(BlockNumber::Number(attempt.block.number)))
-            .call()
-            .map(|r| r.expect("unable to get balance0")),
-        attempt
-            .pair
-            .balancer_pool
-            .get_balance(attempt.pair.token1.address)
-            .block(BlockId::Number(BlockNumber::Number(attempt.block.number)))
-            .call()
-            .map(|r| r.expect("unable to get balance1"))
-    );
+    let pair = ctx
+        .pairs
+        .get(&attempt.pair.uniswap_pair)
+        .expect("missing context uniswap pair");
+
+    let pool = ctx
+        .pools
+        .get(&attempt.pair.balancer_pool)
+        .expect("missing context balancer pool");
+
+    let balance0 = *pool.balances.get(&attempt.pair.token0.address).unwrap();
+    let balance1 = *pool.balances.get(&attempt.pair.token1.address).unwrap();
 
     let tx = arbrito
         .perform(
             borrow,
             amount,
-            attempt.pair.uniswap_pair.address(),
-            attempt.pair.balancer_pool.address(),
+            attempt.pair.uniswap_pair,
+            attempt.pair.balancer_pool,
             attempt.pair.token0.address,
             attempt.pair.token1.address,
-            U256::from(reserve0),
-            U256::from(reserve1),
+            pair.reserve0,
+            pair.reserve1,
             balance0,
             balance1,
         )
@@ -506,8 +485,8 @@ async fn main() {
         .map(|pair| ArbritagePair {
             token0: tokens.get(&pair.token0).expect("unknown token").clone(),
             token1: tokens.get(&pair.token1).expect("unknown token").clone(),
-            balancer_pool: BalancerPool::at(&web3, pair.balancer_pool),
-            uniswap_pair: UniswapPair::at(&web3, pair.uniswap_pair),
+            balancer_pool: pair.balancer_pool,
+            uniswap_pair: pair.uniswap_pair,
             weth: weth.clone(),
         })
         .collect();
@@ -620,6 +599,7 @@ async fn main() {
                         max_attempt,
                         arbrito.clone(),
                         executor_address,
+                        context,
                     ));
                 }
             }
