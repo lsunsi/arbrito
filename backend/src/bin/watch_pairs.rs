@@ -67,6 +67,7 @@ fn format_block_number(number: U64) -> String {
 
 #[derive(Debug, Clone, Copy)]
 struct Block {
+    id: BlockId,
     number: U64,
     gas_price: U256,
     balance: U256,
@@ -132,6 +133,7 @@ impl Block {
         );
 
         Block {
+            id: BlockId::Number(BlockNumber::Number(number)),
             gas_price: gas_price.expect("failed fetching gas_price"),
             balance: balance.expect("failed fetching balance"),
             nonce: nonce.expect("failed fetching nonce"),
@@ -148,12 +150,10 @@ impl ArbritagePair {
         config: Config,
         block: Block,
     ) -> ArbritageResult {
-        let block_id = BlockId::Number(BlockNumber::Number(block.number));
-
         let (reserve0, reserve1, _) = self
             .uniswap_pair
             .get_reserves()
-            .block(block_id)
+            .block(block.id)
             .call()
             .await
             .expect("uniswap_pair get_reserves failed");
@@ -167,21 +167,21 @@ impl ArbritagePair {
         let bi = self
             .balancer_pool
             .get_balance(borrow_token.address)
-            .block(block_id)
+            .block(block.id)
             .call()
             .await
             .expect("balancer get_balance(source) failed");
         let bo = self
             .balancer_pool
             .get_balance(profit_token.address)
-            .block(block_id)
+            .block(block.id)
             .call()
             .await
             .expect("balancer get_balance(target) failed");
         let s = self
             .balancer_pool
             .get_swap_fee()
-            .block(block_id)
+            .block(block.id)
             .call()
             .await
             .expect("balancer get_swap_fee failed");
@@ -202,14 +202,14 @@ impl ArbritagePair {
 
             let (reserve0, reserve1, _) = profit_pair
                 .get_reserves()
-                .block(block_id)
+                .block(block.id)
                 .call()
                 .await
                 .expect("uniswap_pair profit get_reserves failed");
 
             let token0address = profit_pair
                 .token_0()
-                .block(block_id)
+                .block(block.id)
                 .call()
                 .await
                 .expect("uniswap_pair profit token0 failed");
