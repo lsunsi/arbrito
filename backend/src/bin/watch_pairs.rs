@@ -1,11 +1,16 @@
 use colored::Colorize;
 use ethcontract::{Account, BlockId, BlockNumber, GasPrice, Password, TransactionCondition};
 use futures::FutureExt;
+use itertools::Itertools;
 use pooller::{
     gen::{Arbrito, BalancerPool, UniswapPair},
-    max_profit, uniswap_out_given_in, Pairs,
+    max_profit, uniswap_out_given_in, Pairs, Token,
 };
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+    sync::Arc,
+};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 use web3::{
     futures::{future::join_all, StreamExt},
@@ -25,7 +30,7 @@ const MAX_GAS_USAGE: u128 = 400_000;
 const MIN_GAS_SCALE: u8 = 2;
 const MAX_GAS_SCALE: u8 = 5;
 
-fn format_amount_colored(token: &ArbritageToken, amount: U256) -> String {
+fn format_amount_colored(token: &Token, amount: U256) -> String {
     let string = format_amount(token, amount);
 
     if amount >= U256::exp10(18) {
@@ -42,7 +47,7 @@ fn format_amount_colored(token: &ArbritageToken, amount: U256) -> String {
     .to_string()
 }
 
-fn format_amount(token: &ArbritageToken, amount: U256) -> String {
+fn format_amount(token: &Token, amount: U256) -> String {
     let decimals = U256::exp10(token.decimals);
     format!(
         "{} {}.{:03$}",
@@ -83,6 +88,36 @@ struct Config {
     max_gas_scale: u8,
 }
 
+struct Context {
+    block: Block,
+    config: Config,
+    pairs: HashMap<H160, UniswapPairResolved>,
+    pools: HashMap<H160, BalancerPoolResolved>,
+}
+
+struct UniswapPairBase {
+    contract: UniswapPair,
+    address: H160,
+    token0: H160,
+}
+
+struct UniswapPairResolved {
+    reserve0: U256,
+    reserve1: U256,
+    token0: H160,
+}
+
+struct BalancerPoolBase {
+    contract: BalancerPool,
+    tokens: HashSet<H160>,
+    address: H160,
+}
+
+struct BalancerPoolResolved {
+    balances: HashMap<H160, U256>,
+    swap_fee: U256,
+}
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
 enum ArbritageResult {
     NotProfit,
@@ -98,17 +133,9 @@ enum ArbritageResult {
 }
 
 #[derive(Debug, Clone)]
-struct ArbritageToken {
-    weth_uniswap_pair: Option<UniswapPair>,
-    decimals: usize,
-    symbol: String,
-    address: H160,
-}
-
-#[derive(Debug, Clone)]
 struct ArbritageAttempt {
     pair: ArbritagePair,
-    tokens: (ArbritageToken, ArbritageToken),
+    tokens: (Token, Token),
     result: ArbritageResult,
     config: Config,
     block: Block,
@@ -118,9 +145,9 @@ struct ArbritageAttempt {
 struct ArbritagePair {
     balancer_pool: BalancerPool,
     uniswap_pair: UniswapPair,
-    token0: ArbritageToken,
-    token1: ArbritageToken,
-    weth: ArbritageToken,
+    token0: Token,
+    token1: Token,
+    weth: Token,
 }
 
 impl Block {
@@ -142,52 +169,67 @@ impl Block {
     }
 }
 
-impl ArbritagePair {
-    async fn run(
-        &self,
-        borrow_token: &ArbritageToken,
-        profit_token: &ArbritageToken,
-        config: Config,
-        block: Block,
-    ) -> ArbritageResult {
-        let (reserve0, reserve1, _) = self
-            .uniswap_pair
-            .get_reserves()
-            .block(block.id)
-            .call()
-            .await
-            .expect("uniswap_pair get_reserves failed");
+impl UniswapPairBase {
+    async fn resolve(&self, block: Block) -> (H160, UniswapPairResolved) {
+        let req = self.contract.get_reserves().block(block.id);
+        let (reserve0, reserve1, _) = req.call().await.expect("unable to fetch reserves");
 
-        let (ro, ri) = if self.token0.address == borrow_token.address {
-            (reserve0, reserve1)
+        (
+            self.address,
+            UniswapPairResolved {
+                reserve0: U256::from(reserve0),
+                reserve1: U256::from(reserve1),
+                token0: self.token0,
+            },
+        )
+    }
+}
+
+impl BalancerPoolBase {
+    async fn resolve(&self, block: Block) -> (H160, BalancerPoolResolved) {
+        let req = self.contract.get_swap_fee().block(block.id);
+        let swap_fee = req.call().await.expect("unable to fetch swap fee");
+
+        let futs = self.tokens.iter().copied().map(|t| {
+            let req = self.contract.get_balance(t).block(block.id);
+            req.call().map(move |r| (t, r.expect("unable to balancer")))
+        });
+
+        let balances = join_all(futs).await.into_iter().collect();
+        (self.address, BalancerPoolResolved { balances, swap_fee })
+    }
+}
+
+impl ArbritagePair {
+    fn run(&self, borrow_token: &Token, profit_token: &Token, ctx: &Context) -> ArbritageResult {
+        let pair = ctx
+            .pairs
+            .get(&self.uniswap_pair.address())
+            .expect("missing uniswap resolve");
+
+        let pool = ctx
+            .pools
+            .get(&self.balancer_pool.address())
+            .expect("missing balancer resolve");
+
+        let (ro, ri) = if pair.token0 == borrow_token.address {
+            (pair.reserve0, pair.reserve1)
         } else {
-            (reserve1, reserve0)
+            (pair.reserve1, pair.reserve0)
         };
 
-        let bi = self
-            .balancer_pool
-            .get_balance(borrow_token.address)
-            .block(block.id)
-            .call()
-            .await
-            .expect("balancer get_balance(source) failed");
-        let bo = self
-            .balancer_pool
-            .get_balance(profit_token.address)
-            .block(block.id)
-            .call()
-            .await
-            .expect("balancer get_balance(target) failed");
-        let s = self
-            .balancer_pool
-            .get_swap_fee()
-            .block(block.id)
-            .call()
-            .await
-            .expect("balancer get_swap_fee failed");
+        let bi = pool
+            .balances
+            .get(&borrow_token.address)
+            .expect("missing borrow token balance");
+
+        let bo = pool
+            .balances
+            .get(&profit_token.address)
+            .expect("missing profit token balance");
 
         let (borrow_amount, payback_amount, profit) =
-            match max_profit(U256::from(ri), U256::from(ro), bi, bo, s) {
+            match max_profit(U256::from(ri), U256::from(ro), *bi, *bo, pool.swap_fee) {
                 None => return ArbritageResult::NotProfit,
                 Some(a) => a,
             };
@@ -195,32 +237,25 @@ impl ArbritagePair {
         let weth_profit = if profit_token.address == self.weth.address {
             profit
         } else {
-            let profit_pair = profit_token
+            let profit_pair_address = profit_token
                 .weth_uniswap_pair
-                .as_ref()
                 .expect("required uniswap pair missing");
 
-            let (reserve0, reserve1, _) = profit_pair
-                .get_reserves()
-                .block(block.id)
-                .call()
-                .await
-                .expect("uniswap_pair profit get_reserves failed");
+            let profit_pair = ctx.pairs.get(&profit_pair_address).unwrap();
 
-            let token0address = profit_pair
-                .token_0()
-                .block(block.id)
-                .call()
-                .await
-                .expect("uniswap_pair profit token0 failed");
-
-            let (mut ro, mut ri) = if token0address == profit_token.address {
-                (U256::from(reserve1), U256::from(reserve0))
+            let (mut ro, mut ri) = if profit_pair.token0 == profit_token.address {
+                (
+                    U256::from(profit_pair.reserve1),
+                    U256::from(profit_pair.reserve0),
+                )
             } else {
-                (U256::from(reserve0), U256::from(reserve1))
+                (
+                    U256::from(profit_pair.reserve0),
+                    U256::from(profit_pair.reserve1),
+                )
             };
 
-            if profit_pair.address() == self.uniswap_pair.address() {
+            if profit_pair_address == self.uniswap_pair.address() {
                 ri += payback_amount;
                 ro -= borrow_amount;
             }
@@ -228,20 +263,20 @@ impl ArbritagePair {
             uniswap_out_given_in(ri, ro, profit)
         };
 
-        if weth_profit <= config.target_weth_profit {
+        if weth_profit <= ctx.config.target_weth_profit {
             return ArbritageResult::GrossProfit {
                 amount: borrow_amount,
                 weth_profit,
             };
         }
 
-        let max_gas_price =
-            (block.balance / config.max_gas_usage).min(block.gas_price * config.max_gas_scale);
+        let max_gas_price = (ctx.block.balance / ctx.config.max_gas_usage)
+            .min(ctx.block.gas_price * ctx.config.max_gas_scale);
 
-        let min_gas_price = block.gas_price * config.min_gas_scale;
+        let min_gas_price = ctx.block.gas_price * ctx.config.min_gas_scale;
 
         let target_gas_price =
-            (weth_profit - config.target_weth_profit) / config.expected_gas_usage;
+            (weth_profit - ctx.config.target_weth_profit) / ctx.config.expected_gas_usage;
 
         if max_gas_price < min_gas_price {
             log::warn!("max_gas_price < min_gas_price. attempt won't be correctly calculated");
@@ -263,21 +298,21 @@ impl ArbritagePair {
         }
     }
 
-    async fn attempts(&self, config: Config, block: Block) -> Vec<ArbritageAttempt> {
+    fn attempts(&self, ctx: &Context) -> Vec<ArbritageAttempt> {
         vec![
             ArbritageAttempt {
                 pair: self.clone(),
-                result: self.run(&self.token0, &self.token1, config, block).await,
+                result: self.run(&self.token0, &self.token1, ctx),
                 tokens: (self.token0.clone(), self.token1.clone()),
-                config,
-                block,
+                config: ctx.config,
+                block: ctx.block,
             },
             ArbritageAttempt {
                 pair: self.clone(),
-                result: self.run(&self.token1, &self.token0, config, block).await,
+                result: self.run(&self.token1, &self.token0, ctx),
                 tokens: (self.token1.clone(), self.token0.clone()),
-                config,
-                block,
+                config: ctx.config,
+                block: ctx.block,
             },
         ]
     }
@@ -400,18 +435,50 @@ async fn main() {
     let web3 = Web3::new(WebSocket::new(WEB3_ENDPOINT).await.expect("ws failed"));
 
     let Pairs { tokens, pairs } = Pairs::read().expect("pairs reading failed");
-    let tokens: HashMap<_, _> = tokens
+    let tokens: HashMap<_, _> = tokens.into_iter().map(|t| (t.address, t)).collect();
+
+    let mut uniswap_pair_bases_addrs = HashSet::new();
+    let mut uniswap_pair_bases: Vec<_> = pairs
+        .iter()
+        .unique_by(|pair| pair.uniswap_pair)
+        .map(|pair| {
+            uniswap_pair_bases_addrs.insert(pair.uniswap_pair);
+            UniswapPairBase {
+                contract: UniswapPair::at(&web3, pair.uniswap_pair),
+                address: pair.uniswap_pair,
+                token0: pair.token0,
+            }
+        })
+        .collect();
+
+    for (_, token) in &tokens {
+        if let Some(weth_uniswap_pair) = token.weth_uniswap_pair {
+            if !uniswap_pair_bases_addrs.contains(&weth_uniswap_pair) {
+                let contract = UniswapPair::at(&web3, weth_uniswap_pair);
+                uniswap_pair_bases.push(UniswapPairBase {
+                    token0: contract.token_0().call().await.unwrap(),
+                    address: weth_uniswap_pair,
+                    contract,
+                });
+            }
+        }
+    }
+
+    let balancer_pair_bases: Vec<_> = pairs
+        .iter()
+        .group_by(|pair| pair.balancer_pool)
         .into_iter()
-        .map(|t| {
-            (
-                t.address,
-                ArbritageToken {
-                    weth_uniswap_pair: t.weth_uniswap_pair.map(|a| UniswapPair::at(&web3, a)),
-                    decimals: t.decimals,
-                    address: t.address,
-                    symbol: t.symbol,
-                },
-            )
+        .map(|(address, pairs)| {
+            let tokens = pairs
+                .into_iter()
+                .flat_map(|pair| vec![pair.token0, pair.token1])
+                .collect();
+
+            BalancerPoolBase {
+                contract: BalancerPool::at(&web3, address),
+                address,
+                tokens,
+            }
         })
         .collect();
 
@@ -470,6 +537,19 @@ async fn main() {
             let t = std::time::Instant::now();
             let block = Block::fetch(&web3, block_number, executor_address).await;
 
+            let futs = uniswap_pair_bases.iter().map(|pair| pair.resolve(block));
+            let uniswap_pair_resolves: HashMap<_, _> = join_all(futs).await.into_iter().collect();
+
+            let futs = balancer_pair_bases.iter().map(|pair| pair.resolve(block));
+            let balancer_pool_resolves: HashMap<_, _> = join_all(futs).await.into_iter().collect();
+
+            let context = Context {
+                pools: balancer_pool_resolves,
+                pairs: uniswap_pair_resolves,
+                config,
+                block,
+            };
+
             let min_required_profit = config.target_weth_profit
                 + (block.gas_price * config.min_gas_scale) * config.expected_gas_usage;
 
@@ -480,11 +560,11 @@ async fn main() {
                 (block.gas_price * config.min_gas_scale) / U256::exp10(9)
             );
 
-            let attempt_futs = arbritage_pairs
+            let attempts: Vec<_> = arbritage_pairs
                 .iter()
-                .map(|pair| pair.attempts(config, block));
-
-            let attempts: Vec<_> = join_all(attempt_futs).await.into_iter().flatten().collect();
+                .map(|pair| pair.attempts(&context))
+                .flatten()
+                .collect();
 
             let mut not_profits_count = 0;
             let mut gross_profits_count = 0;
