@@ -1,7 +1,7 @@
 mod arbrito;
-mod balancer;
+mod balancerpool;
 mod uniswappair;
 
 pub use arbrito::Arbrito;
-pub use balancer::Balancer;
+pub use balancerpool::BalancerPool;
 pub use uniswappair::UniswapPair;
