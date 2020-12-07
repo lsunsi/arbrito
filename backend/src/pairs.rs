@@ -14,8 +14,8 @@ pub struct Token {
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Pair {
-    pub balancer: H160,
-    pub uniswap: H160,
+    pub balancer_pool: H160,
+    pub uniswap_pair: H160,
     pub token0: H160,
     pub token1: H160,
 }

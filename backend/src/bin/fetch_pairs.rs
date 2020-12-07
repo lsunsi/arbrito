@@ -305,8 +305,8 @@ fn build_pairs(uniswap_pairs: Vec<(H160, Token, Token)>, balancer_pools: Vec<Vec
             pairs.push(Pair {
                 token0: token0.address.clone(),
                 token1: token1.address.clone(),
-                balancer: balancer.clone(),
-                uniswap: uniswap.clone(),
+                balancer_pool: balancer.clone(),
+                uniswap_pair: uniswap.clone(),
             });
         }
 

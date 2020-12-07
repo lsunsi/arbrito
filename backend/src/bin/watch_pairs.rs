@@ -467,8 +467,8 @@ async fn main() {
         .map(|pair| ArbritagePair {
             token0: tokens.get(&pair.token0).expect("unknown token").clone(),
             token1: tokens.get(&pair.token1).expect("unknown token").clone(),
-            balancer_pool: BalancerPool::at(&web3, pair.balancer),
-            uniswap_pair: UniswapPair::at(&web3, pair.uniswap),
+            balancer_pool: BalancerPool::at(&web3, pair.balancer_pool),
+            uniswap_pair: UniswapPair::at(&web3, pair.uniswap_pair),
             weth: weth.clone(),
         })
         .collect();
