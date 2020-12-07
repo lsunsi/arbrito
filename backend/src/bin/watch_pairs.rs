@@ -6,7 +6,7 @@ use pooller::{
     max_profit, uniswap_out_given_in, Pairs,
 };
 use std::{collections::HashMap, str::FromStr, sync::Arc};
-use tokio::sync::{mpsc::unbounded_channel, Mutex, OwnedMutexGuard};
+use tokio::sync::{Mutex, OwnedMutexGuard};
 use web3::{
     futures::{future::join_all, StreamExt},
     transports::WebSocket,
@@ -399,8 +399,6 @@ async fn main() {
 
     let web3 = Web3::new(WebSocket::new(WEB3_ENDPOINT).await.expect("ws failed"));
 
-    let weth_address = H160::from_str(WETH_ADDRESS).expect("failed parsing weth address");
-
     let Pairs { tokens, pairs } = Pairs::read().expect("pairs reading failed");
     let tokens: HashMap<_, _> = tokens
         .into_iter()
@@ -417,6 +415,7 @@ async fn main() {
         })
         .collect();
 
+    let weth_address = H160::from_str(WETH_ADDRESS).expect("failed parsing weth address");
     let weth = tokens.get(&weth_address).expect("where's my weth, boy?");
 
     let arbrito_address = H160::from_str(ARBRITO_ADDRESS).expect("failed parsing arbrito address");
@@ -433,34 +432,7 @@ async fn main() {
         max_gas_scale: MAX_GAS_SCALE,
     };
 
-    let (tx, mut rx) = unbounded_channel::<ArbritageAttempt>();
-
-    tokio::spawn(async move {
-        let lock = Arc::new(Mutex::new(()));
-        let mut block_number = U64::from(0);
-
-        while let Some(attempt) = rx.recv().await {
-            if attempt.block.number <= block_number {
-                log::warn!(
-                    "{} Dropped profitable attempt",
-                    format_block_number(block_number)
-                );
-                continue;
-            }
-
-            block_number = attempt.block.number;
-
-            match lock.clone().try_lock_owned() {
-                Err(_) => log::info!(
-                    "{} Dropped profitable attempt waiting for previous one",
-                    format_block_number(block_number)
-                ),
-                Ok(guard) => {
-                    tokio::spawn(execute(guard, attempt, arbrito.clone(), executor_address));
-                }
-            };
-        }
-    });
+    let execution_lock = Arc::new(Mutex::new(()));
 
     let arbritage_pairs: Vec<_> = pairs
         .into_iter()
@@ -484,8 +456,18 @@ async fn main() {
             };
 
             log::info!("{} New block header", format_block_number(block_number));
-            let t = std::time::Instant::now();
+            let guard = match execution_lock.clone().try_lock_owned() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    log::info!(
+                        "{} Waiting on previous execution",
+                        format_block_number(block_number)
+                    );
+                    return ();
+                }
+            };
 
+            let t = std::time::Instant::now();
             let block = Block::fetch(&web3, block_number, executor_address).await;
 
             let min_required_profit = config.target_weth_profit
@@ -498,56 +480,67 @@ async fn main() {
                 (block.gas_price * config.min_gas_scale) / U256::exp10(9)
             );
 
-            let attempt_futs = arbritage_pairs.iter().map(|pair| {
-                pair.attempts(config, block).map(|attempts| {
-                    for attempt in &attempts {
-                        if let ArbritageResult::NetProfit { .. } = attempt.result {
-                            tx.send(attempt.clone()).expect("where's the executor at?");
-                        }
-                    }
-                    attempts
-                })
-            });
+            let attempt_futs = arbritage_pairs
+                .iter()
+                .map(|pair| pair.attempts(config, block));
 
             let attempts: Vec<_> = join_all(attempt_futs).await.into_iter().flatten().collect();
 
+            let mut not_profits_count = 0;
+            let mut gross_profits_count = 0;
+            let mut net_profits_count = 0;
+
+            for attempt in &attempts {
+                match attempt.result {
+                    ArbritageResult::NotProfit => not_profits_count += 1,
+                    ArbritageResult::GrossProfit { .. } => gross_profits_count += 1,
+                    ArbritageResult::NetProfit { .. } => net_profits_count += 1,
+                }
+            }
+
             let max_attempt = attempts
-                .iter()
+                .into_iter()
                 .max_by(|a1, a2| a1.result.cmp(&a2.result))
                 .expect("empty arbritage results");
 
             match max_attempt.result {
                 ArbritageResult::NotProfit => {
-                    log::info!("{} No profit found", format_block_number(block_number))
+                    log::info!("{} All attempts suck", format_block_number(block_number))
                 }
                 ArbritageResult::GrossProfit {
                     weth_profit,
                     amount,
-                }
-                | ArbritageResult::NetProfit {
-                    weth_profit,
-                    amount,
-                    ..
                 } => {
                     log::info!(
-                        "{} Highest profit found: borrow {} for {} profit ({})",
+                        "{} Best attempt found: borrow {} for {} profit ({})",
                         format_block_number(block_number),
                         format_amount(&max_attempt.tokens.0, amount),
                         max_attempt.tokens.1.symbol,
                         format_amount_colored(&weth, weth_profit),
                     );
                 }
-            }
+                ArbritageResult::NetProfit {
+                    weth_profit,
+                    gas_price,
+                    amount,
+                    ..
+                } => {
+                    log::info!(
+                        "{} {}: borrow {} for {} profit ({} @ {} gwei)",
+                        format_block_number(block_number),
+                        "Executing best attempt".bold().underline(),
+                        format_amount(&max_attempt.tokens.0, amount),
+                        max_attempt.tokens.1.symbol,
+                        format_amount_colored(&weth, weth_profit),
+                        gas_price / U256::exp10(9)
+                    );
 
-            let mut not_profits_count = 0;
-            let mut gross_profits_count = 0;
-            let mut net_profits_count = 0;
-
-            for attempt in attempts {
-                match attempt.result {
-                    ArbritageResult::NotProfit => not_profits_count += 1,
-                    ArbritageResult::GrossProfit { .. } => gross_profits_count += 1,
-                    ArbritageResult::NetProfit { .. } => net_profits_count += 1,
+                    tokio::spawn(execute(
+                        guard,
+                        max_attempt,
+                        arbrito.clone(),
+                        executor_address,
+                    ));
                 }
             }
 
