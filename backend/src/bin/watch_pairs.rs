@@ -16,14 +16,15 @@ use web3::{
     futures::{future::join_all, StreamExt},
     transports::WebSocket,
     types::U64,
-    types::{H160, U256},
+    types::{TransactionId, H160, U256},
     Web3,
 };
 
 const WEB3_ENDPOINT: &str = "ws://127.0.0.1:8546";
-const WETH_ADDRESS: &str = "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
+const WETH_ADDRESS: &str = "C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
 const ARBRITO_ADDRESS: &str = "3FE133c5b1Aa156bF7D8Cf3699794d09Ef911ec1";
 const EXECUTOR_ADDRESS: &str = "Af43007aD675D6C72E96905cf4d8acB58ba0E041";
+const UNISWAP_ROUTER_ADDRESS: &str = "7a250d5630B4cF539739dF2C5dAcb4c659F2488D";
 const TARGET_WETH_PROFIT: u128 = 10_000_000_000_000_000; // 0.01 eth
 const EXPECTED_GAS_USAGE: u128 = 350_000;
 const MAX_GAS_USAGE: u128 = 400_000;
@@ -414,7 +415,7 @@ async fn main() {
     let web3 = Web3::new(WebSocket::new(WEB3_ENDPOINT).await.expect("ws failed"));
 
     let Pairs { tokens, pairs } = Pairs::read().expect("pairs reading failed");
-    let tokens: HashMap<_, _> = tokens.into_iter().map(|t| (t.address, t)).collect();
+    let tokens: Arc<HashMap<_, _>> = Arc::new(tokens.into_iter().map(|t| (t.address, t)).collect());
 
     let mut uniswap_pair_bases_addrs = HashSet::new();
     let mut uniswap_pair_bases: Vec<_> = pairs
@@ -430,7 +431,7 @@ async fn main() {
         })
         .collect();
 
-    for (_, token) in &tokens {
+    for (_, token) in tokens.iter() {
         if let Some(weth_uniswap_pair) = token.weth_uniswap_pair {
             if !uniswap_pair_bases_addrs.contains(&weth_uniswap_pair) {
                 let contract = UniswapPair::at(&web3, weth_uniswap_pair);
@@ -470,6 +471,9 @@ async fn main() {
     let executor_address =
         H160::from_str(EXECUTOR_ADDRESS).expect("failed parsing executor address");
 
+    let uniswap_router_address =
+        H160::from_str(UNISWAP_ROUTER_ADDRESS).expect("failed parsing uniswap router address");
+
     let config = Config {
         target_weth_profit: U256::from(TARGET_WETH_PROFIT),
         expected_gas_usage: U256::from(EXPECTED_GAS_USAGE),
@@ -491,7 +495,73 @@ async fn main() {
         })
         .collect();
 
-    web3.eth_subscribe()
+    let pending_txs_stream = web3
+        .eth_subscribe()
+        .subscribe_new_pending_transactions()
+        .await
+        .expect("failed subscribing to new pending transactions")
+        .filter_map(|res| async move { Result::ok(res) })
+        .filter_map(|tx_hash| {
+            web3.eth()
+                .transaction(TransactionId::Hash(tx_hash))
+                .map(Result::ok)
+                .map(Option::flatten)
+        })
+        .for_each(|tx: web3::types::Transaction| {
+            let tokens = tokens.clone();
+
+            async move {
+                let to = match tx.to {
+                    None => return,
+                    Some(to) => to,
+                };
+
+                if to != uniswap_router_address {
+                    return;
+                }
+
+                if tx.input.0.len() < 4 {
+                    return;
+                }
+                if (tx.input.0.len() - 4) % 32 != 0 {
+                    log::warn!("unsupported input size");
+                    return;
+                }
+
+                let method_name = match &tx.input.0[0..4] {
+                    [56, 237, 23, 57] => "swapExactTokensForTokens",
+                    [127, 243, 106, 181] => "swapExactETHForTokens",
+                    _ => return,
+                };
+
+                let mut addr: H160 = H160::zero();
+                let token_matches: Vec<_> = tx.input.0[4..]
+                    .chunks_exact(32)
+                    .filter_map(|chunk| {
+                        if chunk[0..12].iter().find(|b| **b != 0).is_some() {
+                            return None;
+                        }
+
+                        addr.assign_from_slice(&chunk[12..32]);
+                        tokens.get(&addr).map(|t| t.symbol.clone())
+                    })
+                    .collect();
+
+                if token_matches.len() == 0 {
+                    return;
+                }
+
+                log::info!(
+                    "Uniswap {}({}) {:?}",
+                    method_name,
+                    token_matches.join("->"),
+                    tx.hash
+                );
+            }
+        });
+
+    let heads_stream = web3
+        .eth_subscribe()
         .subscribe_new_heads()
         .await
         .expect("failed subscribing to new heads")
@@ -615,6 +685,7 @@ async fn main() {
             );
 
             ()
-        })
-        .await;
+        });
+
+    tokio::join!(pending_txs_stream, heads_stream);
 }
