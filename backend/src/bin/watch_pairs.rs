@@ -4,7 +4,9 @@ use futures::FutureExt;
 use itertools::Itertools;
 use pooller::{
     gen::{Arbrito, BalancerPool, UniswapPair},
-    max_profit, uniswap_out_given_in, Pairs, Token,
+    max_profit,
+    txs::UniswapSwap,
+    uniswap_out_given_in, Pairs, Token,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -520,43 +522,9 @@ async fn main() {
                     return;
                 }
 
-                if tx.input.0.len() < 4 {
-                    return;
+                if let Some(swap) = UniswapSwap::from_transaction(&tx, &tokens) {
+                    log::debug!("Uniswap {:?} {:?}", swap, tx.hash);
                 }
-                if (tx.input.0.len() - 4) % 32 != 0 {
-                    log::warn!("unsupported input size");
-                    return;
-                }
-
-                let method_name = match &tx.input.0[0..4] {
-                    [56, 237, 23, 57] => "swapExactTokensForTokens",
-                    [127, 243, 106, 181] => "swapExactETHForTokens",
-                    _ => return,
-                };
-
-                let mut addr: H160 = H160::zero();
-                let token_matches: Vec<_> = tx.input.0[4..]
-                    .chunks_exact(32)
-                    .filter_map(|chunk| {
-                        if chunk[0..12].iter().find(|b| **b != 0).is_some() {
-                            return None;
-                        }
-
-                        addr.assign_from_slice(&chunk[12..32]);
-                        tokens.get(&addr).map(|t| t.symbol.clone())
-                    })
-                    .collect();
-
-                if token_matches.len() == 0 {
-                    return;
-                }
-
-                log::debug!(
-                    "Uniswap {}({}) {:?}",
-                    method_name,
-                    token_matches.join("->"),
-                    tx.hash
-                );
             }
         });
 
