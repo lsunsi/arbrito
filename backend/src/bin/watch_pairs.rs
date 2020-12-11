@@ -551,7 +551,7 @@ async fn main() {
                     return;
                 }
 
-                log::info!(
+                log::debug!(
                     "Uniswap {}({}) {:?}",
                     method_name,
                     token_matches.join("->"),
