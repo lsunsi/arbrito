@@ -1,17 +1,19 @@
 use colored::Colorize;
 use ethcontract::{Account, BlockId, BlockNumber, GasPrice, Password, TransactionCondition};
-use futures::FutureExt;
+use futures::{future::ready, FutureExt};
 use itertools::Itertools;
 use pooller::{
     gen::{Arbrito, BalancerPool, UniswapPair},
-    max_profit, uniswap_out_given_in, Pairs, Token,
+    max_profit,
+    txs::{UniswapSwap, UniswapSwapMatch},
+    uniswap_out_given_in, Pairs, Token,
 };
 use std::{
     collections::{HashMap, HashSet},
     str::FromStr,
     sync::Arc,
 };
-use tokio::sync::{Mutex, OwnedMutexGuard};
+use tokio::sync::{mpsc, Mutex, OwnedMutexGuard};
 use web3::{
     futures::{future::join_all, StreamExt},
     transports::WebSocket,
@@ -319,6 +321,39 @@ impl ArbritagePair {
     }
 }
 
+async fn executor(
+    arbrito: Arbrito,
+    from_address: H160,
+    execution_lock: Arc<Mutex<()>>,
+    mut pending_txs_rx: mpsc::UnboundedReceiver<UniswapSwap>,
+    mut execution_rx: mpsc::UnboundedReceiver<(ArbritageAttempt, Context)>,
+) {
+    let mut executing_attempt: Option<ArbritageAttempt> = None;
+    loop {
+        tokio::select! {
+            pending_tx = pending_txs_rx.recv() => if let Some(swap) = pending_tx {
+                if let Ok(_) = execution_lock.try_lock() {
+                    continue;
+                }
+
+                if let Some(attempt) = &executing_attempt {
+                    match swap.tokens_match(attempt.tokens.1.address, attempt.tokens.0.address) {
+                        Some(UniswapSwapMatch::OppositeDirection) => log::warn!("Found :) concurrent Uniswap Swap: {:?}", swap.address),
+                        Some(UniswapSwapMatch::SameDirection) => log::warn!("Found :( concurrent Uniswap Swap: {:?}", swap.address),
+                        None => ()
+                    };
+                }
+            },
+            execution = execution_rx.recv() => if let Some((attempt, ctx)) = execution {
+                if let Ok(guard) = execution_lock.clone().try_lock_owned() {
+                    executing_attempt = Some(attempt.clone());
+                    tokio::spawn(execute(guard, attempt, arbrito.clone(), from_address, ctx));
+                }
+            }
+        }
+    }
+}
+
 async fn execute(
     _: OwnedMutexGuard<()>,
     attempt: ArbritageAttempt,
@@ -483,6 +518,16 @@ async fn main() {
     };
 
     let execution_lock = Arc::new(Mutex::new(()));
+    let (execution_tx, execution_rx) = mpsc::unbounded_channel();
+    let (pending_txs_tx, pending_txs_rx) = mpsc::unbounded_channel();
+
+    tokio::spawn(executor(
+        arbrito.clone(),
+        executor_address,
+        execution_lock.clone(),
+        pending_txs_rx,
+        execution_rx,
+    ));
 
     let arbritage_pairs: Vec<_> = pairs
         .into_iter()
@@ -508,56 +553,21 @@ async fn main() {
                 .map(Option::flatten)
         })
         .for_each(|tx: web3::types::Transaction| {
-            let tokens = tokens.clone();
+            let to = match tx.to {
+                None => return ready(()),
+                Some(to) => to,
+            };
 
-            async move {
-                let to = match tx.to {
-                    None => return,
-                    Some(to) => to,
-                };
-
-                if to != uniswap_router_address {
-                    return;
-                }
-
-                if tx.input.0.len() < 4 {
-                    return;
-                }
-                if (tx.input.0.len() - 4) % 32 != 0 {
-                    log::warn!("unsupported input size");
-                    return;
-                }
-
-                let method_name = match &tx.input.0[0..4] {
-                    [56, 237, 23, 57] => "swapExactTokensForTokens",
-                    [127, 243, 106, 181] => "swapExactETHForTokens",
-                    _ => return,
-                };
-
-                let mut addr: H160 = H160::zero();
-                let token_matches: Vec<_> = tx.input.0[4..]
-                    .chunks_exact(32)
-                    .filter_map(|chunk| {
-                        if chunk[0..12].iter().find(|b| **b != 0).is_some() {
-                            return None;
-                        }
-
-                        addr.assign_from_slice(&chunk[12..32]);
-                        tokens.get(&addr).map(|t| t.symbol.clone())
-                    })
-                    .collect();
-
-                if token_matches.len() == 0 {
-                    return;
-                }
-
-                log::debug!(
-                    "Uniswap {}({}) {:?}",
-                    method_name,
-                    token_matches.join("->"),
-                    tx.hash
-                );
+            if to != uniswap_router_address {
+                return ready(());
             }
+
+            if let Some(swap) = UniswapSwap::from_transaction(&tx, &tokens) {
+                log::debug!("Uniswap {:?} {:?}", swap, tx.hash);
+                pending_txs_tx.send(swap).expect("Pending txs rx died");
+            }
+
+            ready(())
         });
 
     let heads_stream = web3
@@ -572,15 +582,12 @@ async fn main() {
             };
 
             log::info!("{} New block header", format_block_number(block_number));
-            let guard = match execution_lock.clone().try_lock_owned() {
-                Ok(guard) => guard,
-                Err(_) => {
-                    log::info!(
-                        "{} Waiting on previous execution",
-                        format_block_number(block_number)
-                    );
-                    return ();
-                }
+            if let Err(_) = execution_lock.try_lock() {
+                log::info!(
+                    "{} Waiting on previous execution",
+                    format_block_number(block_number)
+                );
+                return ();
             };
 
             let t = std::time::Instant::now();
@@ -664,13 +671,9 @@ async fn main() {
                         gas_price / U256::exp10(9)
                     );
 
-                    tokio::spawn(execute(
-                        guard,
-                        max_attempt,
-                        arbrito.clone(),
-                        executor_address,
-                        context,
-                    ));
+                    if let Err(_) = execution_tx.send((max_attempt, context)) {
+                        panic!("where's my executor at?");
+                    }
                 }
             }
 
