@@ -3,6 +3,7 @@ use ethcontract::{Account, BlockId, BlockNumber, GasPrice, Password, Transaction
 use futures::{future::ready, FutureExt};
 use itertools::Itertools;
 use pooller::{
+    blocks::Blocks,
     gen::{Arbrito, BalancerPool, UniswapPair},
     max_profit,
     txs::{UniswapSwap, UniswapSwapMatch},
@@ -540,155 +541,149 @@ async fn main() {
         })
         .collect();
 
-    let pending_txs_stream = web3
-        .eth_subscribe()
-        .subscribe_new_pending_transactions()
-        .await
-        .expect("failed subscribing to new pending transactions")
-        .filter_map(|res| async move { Result::ok(res) })
-        .filter_map(|tx_hash| {
-            web3.eth()
-                .transaction(TransactionId::Hash(tx_hash))
-                .map(Result::ok)
-                .map(Option::flatten)
-        })
-        .for_each(|tx: web3::types::Transaction| {
-            let to = match tx.to {
-                None => return ready(()),
-                Some(to) => to,
-            };
+    let web32 = web3.clone();
+    let tokens2 = tokens.clone();
+    tokio::spawn(
+        web3.eth_subscribe()
+            .subscribe_new_pending_transactions()
+            .await
+            .expect("failed subscribing to new pending transactions")
+            .filter_map(|res| async move { Result::ok(res) })
+            .filter_map(move |tx_hash| {
+                web32
+                    .eth()
+                    .transaction(TransactionId::Hash(tx_hash))
+                    .map(Result::ok)
+                    .map(Option::flatten)
+            })
+            .for_each(move |tx: web3::types::Transaction| {
+                let to = match tx.to {
+                    None => return ready(()),
+                    Some(to) => to,
+                };
 
-            if to != uniswap_router_address {
-                return ready(());
+                if to != uniswap_router_address {
+                    return ready(());
+                }
+
+                if let Some(swap) = UniswapSwap::from_transaction(&tx, &tokens2) {
+                    log::debug!("Uniswap {:?} {:?}", swap, tx.hash);
+                    pending_txs_tx.send(swap).expect("Pending txs rx died");
+                }
+
+                ready(())
+            }),
+    );
+
+    let blocks = Blocks::new(&web3, executor_address).await;
+
+    loop {
+        let block = blocks.next().await;
+
+        log::info!("{} New block header", format_block_number(block.number));
+        if let Err(_) = execution_lock.try_lock() {
+            log::info!(
+                "{} Waiting on previous execution",
+                format_block_number(block.number)
+            );
+            continue;
+        };
+
+        let t = std::time::Instant::now();
+        let block = Block::fetch(&web3, block.number, executor_address).await;
+
+        let futs = uniswap_pair_bases.iter().map(|pair| pair.resolve(block));
+        let uniswap_pair_resolves: HashMap<_, _> = join_all(futs).await.into_iter().collect();
+
+        let futs = balancer_pair_bases.iter().map(|pair| pair.resolve(block));
+        let balancer_pool_resolves: HashMap<_, _> = join_all(futs).await.into_iter().collect();
+
+        let context = Context {
+            pools: balancer_pool_resolves,
+            pairs: uniswap_pair_resolves,
+            config,
+            block,
+        };
+
+        let min_required_profit = config.target_weth_profit
+            + (block.gas_price * config.min_gas_scale) * config.expected_gas_usage;
+
+        log::info!(
+            "{} Min required profit {} @ {} gwei",
+            format_block_number(block.number),
+            format_amount(&weth, min_required_profit),
+            (block.gas_price * config.min_gas_scale) / U256::exp10(9)
+        );
+
+        let attempts: Vec<_> = arbritage_pairs
+            .iter()
+            .map(|pair| pair.attempts(&context))
+            .flatten()
+            .collect();
+
+        let mut not_profits_count = 0;
+        let mut gross_profits_count = 0;
+        let mut net_profits_count = 0;
+
+        for attempt in &attempts {
+            match attempt.result {
+                ArbritageResult::NotProfit => not_profits_count += 1,
+                ArbritageResult::GrossProfit { .. } => gross_profits_count += 1,
+                ArbritageResult::NetProfit { .. } => net_profits_count += 1,
             }
+        }
 
-            if let Some(swap) = UniswapSwap::from_transaction(&tx, &tokens) {
-                log::debug!("Uniswap {:?} {:?}", swap, tx.hash);
-                pending_txs_tx.send(swap).expect("Pending txs rx died");
+        let max_attempt = attempts
+            .into_iter()
+            .max_by(|a1, a2| a1.result.cmp(&a2.result))
+            .expect("empty arbritage results");
+
+        match max_attempt.result {
+            ArbritageResult::NotProfit => {
+                log::info!("{} All attempts suck", format_block_number(block.number))
             }
-
-            ready(())
-        });
-
-    let heads_stream = web3
-        .eth_subscribe()
-        .subscribe_new_heads()
-        .await
-        .expect("failed subscribing to new heads")
-        .for_each(|head| async {
-            let block_number = match head.ok().and_then(|h| h.number) {
-                Some(number) => number,
-                None => return (),
-            };
-
-            log::info!("{} New block header", format_block_number(block_number));
-            if let Err(_) = execution_lock.try_lock() {
+            ArbritageResult::GrossProfit {
+                weth_profit,
+                amount,
+            } => {
                 log::info!(
-                    "{} Waiting on previous execution",
-                    format_block_number(block_number)
+                    "{} Best attempt found: borrow {} for {} profit ({})",
+                    format_block_number(block.number),
+                    format_amount(&max_attempt.tokens.0, amount),
+                    max_attempt.tokens.1.symbol,
+                    format_amount_colored(&weth, weth_profit),
                 );
-                return ();
-            };
+            }
+            ArbritageResult::NetProfit {
+                weth_profit,
+                gas_price,
+                amount,
+                ..
+            } => {
+                log::info!(
+                    "{} {}: borrow {} for {} profit ({} @ {} gwei)",
+                    format_block_number(block.number),
+                    "Executing best attempt".bold().underline(),
+                    format_amount(&max_attempt.tokens.0, amount),
+                    max_attempt.tokens.1.symbol,
+                    format_amount_colored(&weth, weth_profit),
+                    gas_price / U256::exp10(9)
+                );
 
-            let t = std::time::Instant::now();
-            let block = Block::fetch(&web3, block_number, executor_address).await;
-
-            let futs = uniswap_pair_bases.iter().map(|pair| pair.resolve(block));
-            let uniswap_pair_resolves: HashMap<_, _> = join_all(futs).await.into_iter().collect();
-
-            let futs = balancer_pair_bases.iter().map(|pair| pair.resolve(block));
-            let balancer_pool_resolves: HashMap<_, _> = join_all(futs).await.into_iter().collect();
-
-            let context = Context {
-                pools: balancer_pool_resolves,
-                pairs: uniswap_pair_resolves,
-                config,
-                block,
-            };
-
-            let min_required_profit = config.target_weth_profit
-                + (block.gas_price * config.min_gas_scale) * config.expected_gas_usage;
-
-            log::info!(
-                "{} Min required profit {} @ {} gwei",
-                format_block_number(block_number),
-                format_amount(&weth, min_required_profit),
-                (block.gas_price * config.min_gas_scale) / U256::exp10(9)
-            );
-
-            let attempts: Vec<_> = arbritage_pairs
-                .iter()
-                .map(|pair| pair.attempts(&context))
-                .flatten()
-                .collect();
-
-            let mut not_profits_count = 0;
-            let mut gross_profits_count = 0;
-            let mut net_profits_count = 0;
-
-            for attempt in &attempts {
-                match attempt.result {
-                    ArbritageResult::NotProfit => not_profits_count += 1,
-                    ArbritageResult::GrossProfit { .. } => gross_profits_count += 1,
-                    ArbritageResult::NetProfit { .. } => net_profits_count += 1,
+                if let Err(_) = execution_tx.send((max_attempt, context)) {
+                    panic!("where's my executor at?");
                 }
             }
+        }
 
-            let max_attempt = attempts
-                .into_iter()
-                .max_by(|a1, a2| a1.result.cmp(&a2.result))
-                .expect("empty arbritage results");
-
-            match max_attempt.result {
-                ArbritageResult::NotProfit => {
-                    log::info!("{} All attempts suck", format_block_number(block_number))
-                }
-                ArbritageResult::GrossProfit {
-                    weth_profit,
-                    amount,
-                } => {
-                    log::info!(
-                        "{} Best attempt found: borrow {} for {} profit ({})",
-                        format_block_number(block_number),
-                        format_amount(&max_attempt.tokens.0, amount),
-                        max_attempt.tokens.1.symbol,
-                        format_amount_colored(&weth, weth_profit),
-                    );
-                }
-                ArbritageResult::NetProfit {
-                    weth_profit,
-                    gas_price,
-                    amount,
-                    ..
-                } => {
-                    log::info!(
-                        "{} {}: borrow {} for {} profit ({} @ {} gwei)",
-                        format_block_number(block_number),
-                        "Executing best attempt".bold().underline(),
-                        format_amount(&max_attempt.tokens.0, amount),
-                        max_attempt.tokens.1.symbol,
-                        format_amount_colored(&weth, weth_profit),
-                        gas_price / U256::exp10(9)
-                    );
-
-                    if let Err(_) = execution_tx.send((max_attempt, context)) {
-                        panic!("where's my executor at?");
-                    }
-                }
-            }
-
-            log::info!(
-                "{} Processed in {:.2} seconds ({} pairs | {} net + {} gross + {} not)",
-                format_block_number(block_number),
-                t.elapsed().as_secs_f64(),
-                arbritage_pairs.len(),
-                net_profits_count,
-                gross_profits_count,
-                not_profits_count
-            );
-
-            ()
-        });
-
-    tokio::join!(pending_txs_stream, heads_stream);
+        log::info!(
+            "{} Processed in {:.2} seconds ({} pairs | {} net + {} gross + {} not)",
+            format_block_number(block.number),
+            t.elapsed().as_secs_f64(),
+            arbritage_pairs.len(),
+            net_profits_count,
+            gross_profits_count,
+            not_profits_count
+        );
+    }
 }

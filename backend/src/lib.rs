@@ -1,3 +1,4 @@
+pub mod blocks;
 mod calc;
 pub mod gen;
 mod pairs;
