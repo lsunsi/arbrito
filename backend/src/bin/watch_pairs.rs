@@ -3,8 +3,8 @@ use ethcontract::{Account, BlockId, BlockNumber, GasPrice, Password, Transaction
 use futures::{future::ready, FutureExt};
 use itertools::Itertools;
 use pooller::{
-    blocks::Blocks,
     gen::{Arbrito, BalancerPool, UniswapPair},
+    latest_block::LatestBlock,
     max_profit,
     txs::{UniswapSwap, UniswapSwapMatch},
     uniswap_out_given_in, Pairs, Token,
@@ -575,11 +575,9 @@ async fn main() {
             }),
     );
 
-    let blocks = Blocks::new(&web3, executor_address).await;
+    let mut latest_block = LatestBlock::new(web3.clone(), executor_address);
 
-    loop {
-        let block = blocks.next().await;
-
+    while let Some(block) = latest_block.next().await {
         log::info!("{} New block header", format_block_number(block.number));
         if let Err(_) = execution_lock.try_lock() {
             log::info!(

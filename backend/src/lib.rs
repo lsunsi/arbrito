@@ -1,6 +1,6 @@
-pub mod blocks;
 mod calc;
 pub mod gen;
+pub mod latest_block;
 mod pairs;
 pub mod txs;
 
