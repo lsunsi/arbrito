@@ -573,6 +573,8 @@ async fn main() {
         execution_rx,
     ));
 
+    let balancer_pools: HashSet<H160> = pairs.iter().map(|p| p.balancer_pool).collect();
+
     let arbritage_pairs: Vec<_> = pairs
         .into_iter()
         .map(|pair| ArbritagePair {

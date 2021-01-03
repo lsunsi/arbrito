@@ -1,6 +1,9 @@
 use crate::pairs::Token;
 use itertools::Itertools;
-use std::{collections::HashMap, fmt::Debug};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+};
 use web3::types::{Transaction, H160, H256, U256};
 
 #[derive(Debug)]
@@ -20,7 +23,7 @@ pub struct UniswapSwap {
     pub tx_hash: H256,
 }
 
-pub enum UniswapSwapMatch {
+pub enum SwapMatch {
     OppositeDirection,
     SameDirection,
 }
@@ -93,7 +96,7 @@ impl UniswapSwap {
         })
     }
 
-    pub fn tokens_match(&self, token_from: H160, token_to: H160) -> Option<UniswapSwapMatch> {
+    pub fn tokens_match(&self, token_from: H160, token_to: H160) -> Option<SwapMatch> {
         for (from, to) in self.tokens.iter().tuple_windows() {
             let (from, to) = match (from, to) {
                 (Some(from), Some(to)) => (from, to),
@@ -101,13 +104,104 @@ impl UniswapSwap {
             };
 
             if from.address == token_from && to.address == token_to {
-                return Some(UniswapSwapMatch::SameDirection);
+                return Some(SwapMatch::SameDirection);
             }
 
             if from.address == token_to && to.address == token_from {
-                return Some(UniswapSwapMatch::OppositeDirection);
+                return Some(SwapMatch::OppositeDirection);
             }
         }
+
+        None
+    }
+}
+
+enum BalancerSwapMethod {
+    ExactAmountOut,
+    ExactAmountIn,
+}
+
+pub struct BalancerSwap {
+    method: BalancerSwapMethod,
+    token_in: Option<Token>,
+    token_out: Option<Token>,
+    pub gas_price: U256,
+    pub tx_hash: H256,
+    pool: H160,
+}
+
+impl BalancerSwap {
+    pub fn from_transaction(
+        tx: &Transaction,
+        balancer_pools: &HashSet<H160>,
+        tokens: &HashMap<H160, Token>,
+    ) -> Option<BalancerSwap> {
+        let pool = tx.to.filter(|to| balancer_pools.contains(to))?;
+
+        if (tx.input.0.len() - 4) % 32 != 0 {
+            log::warn!("unsupported input size");
+            return None;
+        }
+
+        let method = match &tx.input.0[0..4] {
+            [0x82, 0x01, 0xaa, 0x3f] => BalancerSwapMethod::ExactAmountIn,
+            [0x7c, 0x5e, 0x9e, 0xa4] => BalancerSwapMethod::ExactAmountOut,
+            _ => return None,
+        };
+
+        if tx.input.0[4..16].iter().any(|b| *b != 0) || tx.input.0[36..48].iter().any(|b| *b != 0) {
+            return None;
+        }
+
+        let token_in = H160::from_slice(&tx.input.0[16..36]);
+        let token_in = tokens.get(&token_in).cloned();
+
+        let token_out = H160::from_slice(&tx.input.0[48..68]);
+        let token_out = tokens.get(&token_out).cloned();
+
+        if let (None, None) = (&token_in, &token_out) {
+            return None;
+        }
+
+        Some(BalancerSwap {
+            gas_price: tx.gas_price,
+            tx_hash: tx.hash,
+            token_out,
+            token_in,
+            method,
+            pool,
+        })
+    }
+
+    fn tokens_match(&self, token_in: H160, token_out: H160, pool: H160) -> Option<SwapMatch> {
+        if self.pool != pool {
+            return None;
+        }
+
+        let in_is_in = self
+            .token_in
+            .as_ref()
+            .map_or(false, |ti| token_in == ti.address);
+
+        let in_is_out = self
+            .token_in
+            .as_ref()
+            .map_or(false, |ti| token_out == ti.address);
+
+        let out_is_in = self
+            .token_out
+            .as_ref()
+            .map_or(false, |to| token_in == to.address);
+
+        let out_is_out = self
+            .token_out
+            .as_ref()
+            .map_or(false, |to| token_out == to.address);
+
+        // match (self.token_in, self.token_out) {
+        //     (None, None) => return None,
+        //     (Some(token_in), Some(token_out))
+        // }
 
         None
     }
