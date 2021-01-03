@@ -1,7 +1,7 @@
 use crate::pairs::Token;
 use itertools::Itertools;
 use std::{collections::HashMap, fmt::Debug};
-use web3::types::{Transaction, H160, H256};
+use web3::types::{Transaction, H160, H256, U256};
 
 #[derive(Debug)]
 pub enum UniswapSwapMethod {
@@ -16,7 +16,8 @@ pub enum UniswapSwapMethod {
 pub struct UniswapSwap {
     method: UniswapSwapMethod,
     tokens: Vec<Option<Token>>,
-    pub address: H256,
+    pub gas_price: U256,
+    pub tx_hash: H256,
 }
 
 pub enum UniswapSwapMatch {
@@ -83,7 +84,8 @@ impl UniswapSwap {
 
         Some(UniswapSwap {
             tokens: token_matches,
-            address: tx.hash,
+            gas_price: tx.gas_price,
+            tx_hash: tx.hash,
             method,
         })
     }

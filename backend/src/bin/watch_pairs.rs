@@ -1,6 +1,6 @@
 use colored::Colorize;
 use ethcontract::{Account, BlockId, BlockNumber, GasPrice, Password, TransactionCondition};
-use futures::{future::ready, FutureExt};
+use futures::{future::ready, stream::FuturesUnordered, FutureExt};
 use itertools::Itertools;
 use pooller::{
     gen::{Arbrito, BalancerPool, UniswapPair},
@@ -131,7 +131,8 @@ enum ArbritageResult {
     },
     NetProfit {
         weth_profit: U256,
-        gas_price: U256,
+        min_gas_price: U256,
+        max_gas_price: U256,
         amount: U256,
     },
 }
@@ -274,29 +275,26 @@ impl ArbritagePair {
             };
         }
 
-        let max_gas_price = (ctx.block.balance / ctx.config.max_gas_usage)
-            .min(ctx.block.gas_price * ctx.config.max_gas_scale);
-
         let min_gas_price = ctx.block.gas_price * ctx.config.min_gas_scale;
-
-        let target_gas_price =
-            (weth_profit - ctx.config.target_weth_profit) / ctx.config.expected_gas_usage;
+        let max_gas_price = (ctx.block.gas_price * ctx.config.max_gas_scale)
+            .min((weth_profit - ctx.config.target_weth_profit) / ctx.config.expected_gas_usage)
+            .min(ctx.block.balance / ctx.config.max_gas_usage);
 
         if max_gas_price < min_gas_price {
-            log::warn!("max_gas_price < min_gas_price. attempt won't be correctly calculated");
-            ArbritageResult::GrossProfit {
-                amount: borrow_amount,
-                weth_profit,
+            if ctx.block.balance / ctx.config.max_gas_usage < min_gas_price {
+                log::warn!(
+                    "balance cannot pay min gas price. attempt won't be correctly calculated"
+                );
             }
-        } else if target_gas_price < min_gas_price {
             ArbritageResult::GrossProfit {
                 amount: borrow_amount,
                 weth_profit,
             }
         } else {
             ArbritageResult::NetProfit {
-                gas_price: target_gas_price.min(max_gas_price),
                 amount: borrow_amount,
+                min_gas_price,
+                max_gas_price,
                 weth_profit,
             }
         }
@@ -329,7 +327,9 @@ async fn executor(
     mut pending_txs_rx: mpsc::UnboundedReceiver<UniswapSwap>,
     mut execution_rx: mpsc::UnboundedReceiver<(ArbritageAttempt, Context)>,
 ) {
-    let mut executing_attempt: Option<ArbritageAttempt> = None;
+    let mut executing_attempt: Option<(ArbritageAttempt, mpsc::UnboundedSender<UniswapSwap>)> =
+        None;
+
     loop {
         tokio::select! {
             pending_tx = pending_txs_rx.recv() => if let Some(swap) = pending_tx {
@@ -337,18 +337,18 @@ async fn executor(
                     continue;
                 }
 
-                if let Some(attempt) = &executing_attempt {
-                    match swap.tokens_match(attempt.tokens.1.address, attempt.tokens.0.address) {
-                        Some(UniswapSwapMatch::OppositeDirection) => log::warn!("Found :) concurrent Uniswap Swap: {:?}", swap.address),
-                        Some(UniswapSwapMatch::SameDirection) => log::warn!("Found :( concurrent Uniswap Swap: {:?}", swap.address),
-                        None => ()
-                    };
+                if let Some((attempt, conflicting_txs_tx)) = &executing_attempt {
+                    let swap_match = swap.tokens_match(attempt.tokens.1.address, attempt.tokens.0.address);
+                    if let Some(UniswapSwapMatch::SameDirection) = swap_match {
+                        conflicting_txs_tx.send(swap).expect("execute task died");
+                    }
                 }
             },
             execution = execution_rx.recv() => if let Some((attempt, ctx)) = execution {
                 if let Ok(guard) = execution_lock.clone().try_lock_owned() {
-                    executing_attempt = Some(attempt.clone());
-                    tokio::spawn(execute(guard, attempt, arbrito.clone(), from_address, ctx));
+                    let (conflicting_txs_tx, conflicting_txs_rx) = mpsc::unbounded_channel();
+                    executing_attempt = Some((attempt.clone(), conflicting_txs_tx));
+                    tokio::spawn(execute(guard, conflicting_txs_rx, attempt, arbrito.clone(), from_address, ctx));
                 }
             }
         }
@@ -357,14 +357,18 @@ async fn executor(
 
 async fn execute(
     _: OwnedMutexGuard<()>,
+    mut conflicting_txs_rx: mpsc::UnboundedReceiver<UniswapSwap>,
     attempt: ArbritageAttempt,
     arbrito: Arbrito,
     from_address: H160,
     ctx: Context,
 ) {
-    let (amount, gas_price) = match attempt.result {
+    let (amount, min_gas_price, max_gas_price) = match attempt.result {
         ArbritageResult::NetProfit {
-            gas_price, amount, ..
+            min_gas_price,
+            max_gas_price,
+            amount,
+            ..
         } => {
             log::debug!(
                 "Token addresses = {} {}",
@@ -374,7 +378,7 @@ async fn execute(
             log::debug!("UniswapPool = {}", attempt.pair.uniswap_pair);
             log::debug!("BalancerPool = {}", attempt.pair.balancer_pool);
 
-            (amount, gas_price)
+            (amount, min_gas_price, max_gas_price)
         }
         _ => {
             log::error!(
@@ -404,42 +408,81 @@ async fn execute(
     let balance0 = *pool.balances.get(&attempt.pair.token0.address).unwrap();
     let balance1 = *pool.balances.get(&attempt.pair.token1.address).unwrap();
 
-    let tx = arbrito
-        .perform(
-            borrow,
-            amount,
-            attempt.pair.uniswap_pair,
-            attempt.pair.balancer_pool,
-            attempt.pair.token0.address,
-            attempt.pair.token1.address,
-            pair.reserve0,
-            pair.reserve1,
-            balance0,
-            balance1,
-        )
-        .from(Account::Locked(
-            from_address,
-            Password::new(std::env::var("ARBRITO_EXEC_PASSWORD").unwrap()),
-            Some(TransactionCondition::Block(attempt.block.number.as_u64())),
-        ))
-        .gas(attempt.config.max_gas_usage)
-        .gas_price(GasPrice::Value(gas_price))
-        .confirmations(1)
-        .nonce(attempt.block.nonce)
-        .send()
-        .await;
+    let send_tx = |gas_price, wait| {
+        let arbrito = arbrito.clone();
+        let attempt = attempt.clone();
 
-    match tx {
+        async move {
+            if wait {
+                tokio::time::delay_for(std::time::Duration::from_secs(600)).await;
+            }
+
+            arbrito
+                .perform(
+                    borrow,
+                    amount,
+                    attempt.pair.uniswap_pair,
+                    attempt.pair.balancer_pool,
+                    attempt.pair.token0.address,
+                    attempt.pair.token1.address,
+                    pair.reserve0,
+                    pair.reserve1,
+                    balance0,
+                    balance1,
+                )
+                .from(Account::Locked(
+                    from_address,
+                    Password::new(std::env::var("ARBRITO_EXEC_PASSWORD").unwrap()),
+                    Some(TransactionCondition::Block(attempt.block.number.as_u64())),
+                ))
+                .gas(attempt.config.max_gas_usage)
+                .gas_price(GasPrice::Value(gas_price))
+                .nonce(attempt.block.nonce)
+                .confirmations(0)
+                .send()
+                .await
+        }
+    };
+
+    let mut txs = FuturesUnordered::new();
+    let mut last_gas_price = min_gas_price;
+    txs.push(send_tx(last_gas_price, false));
+    txs.push(send_tx(last_gas_price, true));
+
+    let receipt = loop {
+        tokio::select! {
+            receipt = txs.next() => if let Some(receipt) = receipt {
+                if false {
+                    break Some(receipt);
+                }
+            },
+            conflicting_tx = conflicting_txs_rx.recv() => if let Some(conflicting_tx) = conflicting_tx {
+                let new_gas_price = conflicting_tx.gas_price + U256::exp10(9);
+                if last_gas_price < new_gas_price && new_gas_price <= max_gas_price {
+                    last_gas_price = new_gas_price;
+                    txs.push(send_tx(last_gas_price, false));
+                    log::info!(
+                        "{} Pumping up the gas on execution transaction: {} (due to {:?})",
+                        format_block_number(attempt.block.number),
+                        new_gas_price / U256::exp10(9),
+                        conflicting_tx.tx_hash,
+                    );
+                }
+            },
+        };
+    }.unwrap();
+
+    match receipt {
         Err(_) => log::info!(
             "{} {}",
             format_block_number(attempt.block.number),
             "Arbitrage execution failed".red().dimmed(),
         ),
-        Ok(tx) => log::info!(
+        Ok(receipt) => log::info!(
             "{} {} Transaction hash {}",
             format_block_number(attempt.block.number),
             "Arbitrage execution succeeded!".bright_green().bold(),
-            tx.hash()
+            receipt.hash()
         ),
     }
 }
@@ -604,7 +647,7 @@ async fn main() {
         };
 
         let min_required_profit = config.target_weth_profit
-            + (block.gas_price * config.min_gas_scale) * config.expected_gas_usage;
+            + block.gas_price * config.min_gas_scale * config.expected_gas_usage;
 
         log::info!(
             "{} Min required profit {} @ {} gwei",
@@ -653,19 +696,21 @@ async fn main() {
                 );
             }
             ArbritageResult::NetProfit {
+                min_gas_price,
+                max_gas_price,
                 weth_profit,
-                gas_price,
                 amount,
                 ..
             } => {
                 log::info!(
-                    "{} {}: borrow {} for {} profit ({} @ {} gwei)",
+                    "{} {}: borrow {} for {} profit ({} @ {}-{} gwei)",
                     format_block_number(block.number),
                     "Executing best attempt".bold().underline(),
                     format_amount(&max_attempt.tokens.0, amount),
                     max_attempt.tokens.1.symbol,
                     format_amount_colored(&weth, weth_profit),
-                    gas_price / U256::exp10(9)
+                    min_gas_price / U256::exp10(9),
+                    max_gas_price / U256::exp10(9),
                 );
 
                 if let Err(_) = execution_tx.send((max_attempt, context)) {
