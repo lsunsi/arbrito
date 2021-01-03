@@ -600,16 +600,9 @@ async fn main() {
                     .map(Option::flatten)
             })
             .for_each(move |tx: web3::types::Transaction| {
-                let to = match tx.to {
-                    None => return ready(()),
-                    Some(to) => to,
-                };
-
-                if to != uniswap_router_address {
-                    return ready(());
-                }
-
-                if let Some(swap) = UniswapSwap::from_transaction(&tx, &tokens2) {
+                if let Some(swap) =
+                    UniswapSwap::from_transaction(&tx, uniswap_router_address, &tokens2)
+                {
                     log::debug!("Uniswap {:?} {:?}", swap, tx.hash);
                     pending_txs_tx.send(swap).expect("Pending txs rx died");
                 }

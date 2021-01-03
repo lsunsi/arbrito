@@ -43,8 +43,11 @@ impl Debug for UniswapSwap {
 impl UniswapSwap {
     pub fn from_transaction(
         tx: &Transaction,
+        uniswap_router_address: H160,
         tokens: &HashMap<H160, Token>,
     ) -> Option<UniswapSwap> {
+        tx.to.filter(|&to| to == uniswap_router_address)?;
+
         if tx.input.0.len() < 4 {
             return None;
         }
