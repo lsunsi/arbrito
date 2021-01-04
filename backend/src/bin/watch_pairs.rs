@@ -6,7 +6,7 @@ use pooller::{
     gen::{Arbrito, BalancerPool, UniswapPair},
     latest_block::LatestBlock,
     max_profit,
-    txs::{UniswapSwap, UniswapSwapMatch},
+    txs::{Swap, SwapMatch},
     uniswap_out_given_in, Pairs, Token,
 };
 use std::{
@@ -324,11 +324,10 @@ async fn executor(
     arbrito: Arbrito,
     from_address: H160,
     execution_lock: Arc<Mutex<()>>,
-    mut pending_txs_rx: mpsc::UnboundedReceiver<UniswapSwap>,
+    mut pending_txs_rx: mpsc::UnboundedReceiver<Swap>,
     mut execution_rx: mpsc::UnboundedReceiver<(ArbritageAttempt, Context)>,
 ) {
-    let mut executing_attempt: Option<(ArbritageAttempt, mpsc::UnboundedSender<UniswapSwap>)> =
-        None;
+    let mut executing_attempt: Option<(ArbritageAttempt, mpsc::UnboundedSender<Swap>)> = None;
 
     loop {
         tokio::select! {
@@ -338,8 +337,8 @@ async fn executor(
                 }
 
                 if let Some((attempt, conflicting_txs_tx)) = &executing_attempt {
-                    let swap_match = swap.tokens_match(attempt.tokens.1.address, attempt.tokens.0.address);
-                    if let Some(UniswapSwapMatch::SameDirection) = swap_match {
+                    let swap_match = swap.tokens_match(attempt.tokens.1.address, attempt.tokens.0.address, attempt.pair.balancer_pool);
+                    if let Some(SwapMatch::SameDirection) = swap_match {
                         conflicting_txs_tx.send(swap).expect("execute task died");
                     }
                 }
@@ -357,7 +356,7 @@ async fn executor(
 
 async fn execute(
     _: OwnedMutexGuard<()>,
-    mut conflicting_txs_rx: mpsc::UnboundedReceiver<UniswapSwap>,
+    mut conflicting_txs_rx: mpsc::UnboundedReceiver<Swap>,
     attempt: ArbritageAttempt,
     arbrito: Arbrito,
     from_address: H160,
@@ -457,7 +456,7 @@ async fn execute(
                 }
             },
             conflicting_tx = conflicting_txs_rx.recv() => if let Some(conflicting_tx) = conflicting_tx {
-                let new_gas_price = conflicting_tx.gas_price + U256::exp10(9);
+                let new_gas_price = conflicting_tx.gas_price() + U256::exp10(9);
                 if last_gas_price < new_gas_price && new_gas_price <= max_gas_price {
                     last_gas_price = new_gas_price;
                     txs.push(send_tx(last_gas_price, false));
@@ -465,7 +464,7 @@ async fn execute(
                         "{} Pumping up the gas on execution transaction: {} (due to {:?})",
                         format_block_number(attempt.block.number),
                         new_gas_price / U256::exp10(9),
-                        conflicting_tx.tx_hash,
+                        conflicting_tx.tx_hash(),
                     );
                 }
             },
@@ -603,9 +602,9 @@ async fn main() {
             })
             .for_each(move |tx: web3::types::Transaction| {
                 if let Some(swap) =
-                    UniswapSwap::from_transaction(&tx, uniswap_router_address, &tokens2)
+                    Swap::from_transaction(&tx, uniswap_router_address, &balancer_pools, &tokens2)
                 {
-                    log::debug!("Uniswap {:?} {:?}", swap, tx.hash);
+                    log::debug!("Possible conflicting swap {:?} {:?}", swap, tx.hash);
                     pending_txs_tx.send(swap).expect("Pending txs rx died");
                 }
 
