@@ -6,7 +6,7 @@ use pooller::{
     gen::{Arbrito, BalancerPool, UniswapPair},
     latest_block::LatestBlock,
     max_profit,
-    txs::{UniswapSwap, UniswapSwapMatch},
+    txs::{Swap, SwapMatch},
     uniswap_out_given_in, Pairs, Token,
 };
 use std::{
@@ -324,11 +324,10 @@ async fn executor(
     arbrito: Arbrito,
     from_address: H160,
     execution_lock: Arc<Mutex<()>>,
-    mut pending_txs_rx: mpsc::UnboundedReceiver<UniswapSwap>,
+    mut pending_txs_rx: mpsc::UnboundedReceiver<Swap>,
     mut execution_rx: mpsc::UnboundedReceiver<(ArbritageAttempt, Context)>,
 ) {
-    let mut executing_attempt: Option<(ArbritageAttempt, mpsc::UnboundedSender<UniswapSwap>)> =
-        None;
+    let mut executing_attempt: Option<(ArbritageAttempt, mpsc::UnboundedSender<Swap>)> = None;
 
     loop {
         tokio::select! {
@@ -338,8 +337,8 @@ async fn executor(
                 }
 
                 if let Some((attempt, conflicting_txs_tx)) = &executing_attempt {
-                    let swap_match = swap.tokens_match(attempt.tokens.1.address, attempt.tokens.0.address);
-                    if let Some(UniswapSwapMatch::SameDirection) = swap_match {
+                    let swap_match = swap.tokens_match(attempt.tokens.1.address, attempt.tokens.0.address, attempt.pair.balancer_pool);
+                    if let Some(SwapMatch::SameDirection) = swap_match {
                         conflicting_txs_tx.send(swap).expect("execute task died");
                     }
                 }
@@ -357,7 +356,7 @@ async fn executor(
 
 async fn execute(
     _: OwnedMutexGuard<()>,
-    mut conflicting_txs_rx: mpsc::UnboundedReceiver<UniswapSwap>,
+    mut conflicting_txs_rx: mpsc::UnboundedReceiver<Swap>,
     attempt: ArbritageAttempt,
     arbrito: Arbrito,
     from_address: H160,
@@ -408,15 +407,11 @@ async fn execute(
     let balance0 = *pool.balances.get(&attempt.pair.token0.address).unwrap();
     let balance1 = *pool.balances.get(&attempt.pair.token1.address).unwrap();
 
-    let send_tx = |gas_price, wait| {
+    let send_tx = |gas_price| {
         let arbrito = arbrito.clone();
         let attempt = attempt.clone();
 
         async move {
-            if wait {
-                tokio::time::delay_for(std::time::Duration::from_secs(600)).await;
-            }
-
             arbrito
                 .perform(
                     borrow,
@@ -446,26 +441,23 @@ async fn execute(
 
     let mut txs = FuturesUnordered::new();
     let mut last_gas_price = min_gas_price;
-    txs.push(send_tx(last_gas_price, false));
-    txs.push(send_tx(last_gas_price, true));
+    txs.push(send_tx(last_gas_price));
 
     let receipt = loop {
         tokio::select! {
             receipt = txs.next() => if let Some(receipt) = receipt {
-                if false {
-                    break Some(receipt);
-                }
+                break Some(receipt);
             },
             conflicting_tx = conflicting_txs_rx.recv() => if let Some(conflicting_tx) = conflicting_tx {
-                let new_gas_price = conflicting_tx.gas_price + U256::exp10(9);
+                let new_gas_price = conflicting_tx.gas_price() + U256::exp10(9);
                 if last_gas_price < new_gas_price && new_gas_price <= max_gas_price {
                     last_gas_price = new_gas_price;
-                    txs.push(send_tx(last_gas_price, false));
+                    txs.push(send_tx(last_gas_price));
                     log::info!(
                         "{} Pumping up the gas on execution transaction: {} (due to {:?})",
                         format_block_number(attempt.block.number),
                         new_gas_price / U256::exp10(9),
-                        conflicting_tx.tx_hash,
+                        conflicting_tx.tx_hash(),
                     );
                 }
             },
@@ -573,6 +565,8 @@ async fn main() {
         execution_rx,
     ));
 
+    let balancer_pools: HashSet<H160> = pairs.iter().map(|p| p.balancer_pool).collect();
+
     let arbritage_pairs: Vec<_> = pairs
         .into_iter()
         .map(|pair| ArbritagePair {
@@ -600,17 +594,10 @@ async fn main() {
                     .map(Option::flatten)
             })
             .for_each(move |tx: web3::types::Transaction| {
-                let to = match tx.to {
-                    None => return ready(()),
-                    Some(to) => to,
-                };
-
-                if to != uniswap_router_address {
-                    return ready(());
-                }
-
-                if let Some(swap) = UniswapSwap::from_transaction(&tx, &tokens2) {
-                    log::debug!("Uniswap {:?} {:?}", swap, tx.hash);
+                if let Some(swap) =
+                    Swap::from_transaction(&tx, uniswap_router_address, &balancer_pools, &tokens2)
+                {
+                    log::debug!("Possible conflicting swap {:?} {:?}", swap, tx.hash);
                     pending_txs_tx.send(swap).expect("Pending txs rx died");
                 }
 
