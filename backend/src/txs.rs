@@ -30,15 +30,10 @@ impl Swap {
         None
     }
 
-    pub fn tokens_match(
-        &self,
-        token_from: H160,
-        token_to: H160,
-        balancer_pool: H160,
-    ) -> Option<SwapMatch> {
+    pub fn conflicts(&self, token_from: H160, token_to: H160, balancer_pool: H160) -> bool {
         match self {
-            Swap::UniswapSwap(s) => s.tokens_match(token_from, token_to),
-            Swap::BalancerSwap(s) => s.tokens_match(token_from, token_to, balancer_pool),
+            Swap::UniswapSwap(s) => s.conflicts(token_from, token_to),
+            Swap::BalancerSwap(s) => s.conflicts(token_from, token_to, balancer_pool),
         }
     }
 
@@ -72,11 +67,6 @@ pub struct UniswapSwap {
     tokens: Vec<Option<Token>>,
     gas_price: U256,
     tx_hash: H256,
-}
-
-pub enum SwapMatch {
-    OppositeDirection,
-    SameDirection,
 }
 
 impl Debug for UniswapSwap {
@@ -147,23 +137,11 @@ impl UniswapSwap {
         })
     }
 
-    fn tokens_match(&self, token_from: H160, token_to: H160) -> Option<SwapMatch> {
-        for (from, to) in self.tokens.iter().tuple_windows() {
-            let (from, to) = match (from, to) {
-                (Some(from), Some(to)) => (from, to),
-                _ => continue,
-            };
-
-            if from.address == token_from && to.address == token_to {
-                return Some(SwapMatch::SameDirection);
-            }
-
-            if from.address == token_to && to.address == token_from {
-                return Some(SwapMatch::OppositeDirection);
-            }
-        }
-
-        None
+    fn conflicts(&self, token_from: H160, token_to: H160) -> bool {
+        self.tokens.iter().tuple_windows().any(|swap| match swap {
+            (Some(from), Some(to)) => from.address == token_from && to.address == token_to,
+            _ => false,
+        })
     }
 }
 
@@ -225,26 +203,18 @@ impl BalancerSwap {
         })
     }
 
-    fn tokens_match(&self, token_in: H160, token_out: H160, pool: H160) -> Option<SwapMatch> {
+    fn conflicts(&self, token_in: H160, token_out: H160, pool: H160) -> bool {
         if self.pool != pool {
-            return None;
+            return false;
         }
 
         let ti_address = self.token_in.as_ref().map(|t| t.address);
-        let to_address = self.token_out.as_ref().map(|t| t.address);
-
         let in_is_in = ti_address.map_or(false, |addr| token_in == addr);
-        let in_is_out = ti_address.map_or(false, |addr| token_out == addr);
-        let out_is_in = to_address.map_or(false, |addr| token_in == addr);
+
+        let to_address = self.token_out.as_ref().map(|t| t.address);
         let out_is_out = to_address.map_or(false, |addr| token_out == addr);
 
-        if in_is_in || out_is_out {
-            Some(SwapMatch::SameDirection)
-        } else if in_is_out || out_is_in {
-            Some(SwapMatch::OppositeDirection)
-        } else {
-            None
-        }
+        in_is_in || out_is_out
     }
 }
 

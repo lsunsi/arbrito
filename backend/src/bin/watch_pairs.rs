@@ -6,7 +6,7 @@ use pooller::{
     gen::{Arbrito, BalancerPool, UniswapPair},
     latest_block::LatestBlock,
     max_profit,
-    txs::{Swap, SwapMatch},
+    txs::Swap,
     uniswap_out_given_in, Pairs, Token,
 };
 use std::{
@@ -337,8 +337,7 @@ async fn executor(
                 }
 
                 if let Some((attempt, conflicting_txs_tx)) = &executing_attempt {
-                    let swap_match = swap.tokens_match(attempt.tokens.1.address, attempt.tokens.0.address, attempt.pair.balancer_pool);
-                    if let Some(SwapMatch::SameDirection) = swap_match {
+                    if swap.conflicts(attempt.tokens.1.address, attempt.tokens.0.address, attempt.pair.balancer_pool) {
                         conflicting_txs_tx.send(swap).expect("execute task died");
                     }
                 }
