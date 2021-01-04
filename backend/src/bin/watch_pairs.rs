@@ -407,15 +407,11 @@ async fn execute(
     let balance0 = *pool.balances.get(&attempt.pair.token0.address).unwrap();
     let balance1 = *pool.balances.get(&attempt.pair.token1.address).unwrap();
 
-    let send_tx = |gas_price, wait| {
+    let send_tx = |gas_price| {
         let arbrito = arbrito.clone();
         let attempt = attempt.clone();
 
         async move {
-            if wait {
-                tokio::time::delay_for(std::time::Duration::from_secs(600)).await;
-            }
-
             arbrito
                 .perform(
                     borrow,
@@ -445,21 +441,18 @@ async fn execute(
 
     let mut txs = FuturesUnordered::new();
     let mut last_gas_price = min_gas_price;
-    txs.push(send_tx(last_gas_price, false));
-    txs.push(send_tx(last_gas_price, true));
+    txs.push(send_tx(last_gas_price));
 
     let receipt = loop {
         tokio::select! {
             receipt = txs.next() => if let Some(receipt) = receipt {
-                if false {
-                    break Some(receipt);
-                }
+                break Some(receipt);
             },
             conflicting_tx = conflicting_txs_rx.recv() => if let Some(conflicting_tx) = conflicting_tx {
                 let new_gas_price = conflicting_tx.gas_price() + U256::exp10(9);
                 if last_gas_price < new_gas_price && new_gas_price <= max_gas_price {
                     last_gas_price = new_gas_price;
-                    txs.push(send_tx(last_gas_price, false));
+                    txs.push(send_tx(last_gas_price));
                     log::info!(
                         "{} Pumping up the gas on execution transaction: {} (due to {:?})",
                         format_block_number(attempt.block.number),

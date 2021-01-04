@@ -58,7 +58,7 @@ impl Swap {
 }
 
 #[derive(Debug)]
-pub enum UniswapSwapMethod {
+enum UniswapSwapMethod {
     ExactTokensForTokens,
     ExactETHForTokens,
     ExactTokensForETH,
@@ -95,7 +95,7 @@ impl Debug for UniswapSwap {
 }
 
 impl UniswapSwap {
-    pub fn from_transaction(
+    fn from_transaction(
         tx: &Transaction,
         uniswap_router_address: H160,
         tokens: &HashMap<H160, Token>,
@@ -147,7 +147,7 @@ impl UniswapSwap {
         })
     }
 
-    pub fn tokens_match(&self, token_from: H160, token_to: H160) -> Option<SwapMatch> {
+    fn tokens_match(&self, token_from: H160, token_to: H160) -> Option<SwapMatch> {
         for (from, to) in self.tokens.iter().tuple_windows() {
             let (from, to) = match (from, to) {
                 (Some(from), Some(to)) => (from, to),
@@ -183,7 +183,7 @@ pub struct BalancerSwap {
 }
 
 impl BalancerSwap {
-    pub fn from_transaction(
+    fn from_transaction(
         tx: &Transaction,
         balancer_pools: &HashSet<H160>,
         tokens: &HashMap<H160, Token>,
@@ -225,7 +225,7 @@ impl BalancerSwap {
         })
     }
 
-    pub fn tokens_match(&self, token_in: H160, token_out: H160, pool: H160) -> Option<SwapMatch> {
+    fn tokens_match(&self, token_in: H160, token_out: H160, pool: H160) -> Option<SwapMatch> {
         if self.pool != pool {
             return None;
         }
