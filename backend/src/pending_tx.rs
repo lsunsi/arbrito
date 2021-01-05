@@ -7,49 +7,45 @@ use std::{
 use web3::types::{Transaction, H160, H256, U256};
 
 #[derive(Debug)]
-pub enum Swap {
-    UniswapSwap(UniswapSwap),
-    BalancerSwap(BalancerSwap),
+pub struct PendingTx {
+    pub gas_price: U256,
+    pub hash: H256,
+    kind: Kind,
 }
 
-impl Swap {
+impl PendingTx {
     pub fn from_transaction(
         tx: &Transaction,
         uniswap_router_address: H160,
         balancer_pools: &HashSet<H160>,
         tokens: &HashMap<H160, Token>,
-    ) -> Option<Swap> {
-        if let Some(s) = UniswapSwap::from_transaction(tx, uniswap_router_address, tokens) {
-            return Some(Swap::UniswapSwap(s));
+    ) -> Option<PendingTx> {
+        if (tx.input.0.len() - 4) % 32 != 0 {
+            log::warn!("unsupported input size");
+            return None;
         }
 
-        if let Some(s) = BalancerSwap::from_transaction(tx, balancer_pools, tokens) {
-            return Some(Swap::BalancerSwap(s));
-        }
-
-        None
+        UniswapSwap::parse_kind(tx, uniswap_router_address, tokens)
+            .or_else(|| BalancerSwap::parse_kind(tx, balancer_pools, tokens))
+            .map(|kind| PendingTx {
+                gas_price: tx.gas_price,
+                hash: tx.hash,
+                kind,
+            })
     }
 
     pub fn conflicts(&self, token_from: H160, token_to: H160, balancer_pool: H160) -> bool {
-        match self {
-            Swap::UniswapSwap(s) => s.conflicts(token_from, token_to),
-            Swap::BalancerSwap(s) => s.conflicts(token_from, token_to, balancer_pool),
+        match &self.kind {
+            Kind::UniswapSwap(s) => s.conflicts(token_from, token_to),
+            Kind::BalancerSwap(s) => s.conflicts(token_from, token_to, balancer_pool),
         }
     }
+}
 
-    pub fn gas_price(&self) -> U256 {
-        match self {
-            Swap::UniswapSwap(s) => s.gas_price,
-            Swap::BalancerSwap(s) => s.gas_price,
-        }
-    }
-
-    pub fn tx_hash(&self) -> H256 {
-        match self {
-            Swap::UniswapSwap(s) => s.tx_hash,
-            Swap::BalancerSwap(s) => s.tx_hash,
-        }
-    }
+#[derive(Debug)]
+enum Kind {
+    UniswapSwap(UniswapSwap),
+    BalancerSwap(BalancerSwap),
 }
 
 #[derive(Debug)]
@@ -62,11 +58,9 @@ enum UniswapSwapMethod {
     ETHForExactTokens,
 }
 
-pub struct UniswapSwap {
+struct UniswapSwap {
     method: UniswapSwapMethod,
     tokens: Vec<Option<Token>>,
-    gas_price: U256,
-    tx_hash: H256,
 }
 
 impl Debug for UniswapSwap {
@@ -85,19 +79,14 @@ impl Debug for UniswapSwap {
 }
 
 impl UniswapSwap {
-    fn from_transaction(
+    fn parse_kind(
         tx: &Transaction,
         uniswap_router_address: H160,
         tokens: &HashMap<H160, Token>,
-    ) -> Option<UniswapSwap> {
+    ) -> Option<Kind> {
         tx.to.filter(|&to| to == uniswap_router_address)?;
 
         if tx.input.0.len() < 4 {
-            return None;
-        }
-
-        if (tx.input.0.len() - 4) % 32 != 0 {
-            log::warn!("unsupported input size");
             return None;
         }
 
@@ -129,12 +118,10 @@ impl UniswapSwap {
             return None;
         }
 
-        Some(UniswapSwap {
+        Some(Kind::UniswapSwap(UniswapSwap {
             tokens: token_matches,
-            gas_price: tx.gas_price,
-            tx_hash: tx.hash,
             method,
-        })
+        }))
     }
 
     fn conflicts(&self, token_from: H160, token_to: H160) -> bool {
@@ -151,27 +138,20 @@ enum BalancerSwapMethod {
     ExactAmountIn,
 }
 
-pub struct BalancerSwap {
+struct BalancerSwap {
     method: BalancerSwapMethod,
     token_in: Option<Token>,
     token_out: Option<Token>,
-    gas_price: U256,
-    tx_hash: H256,
     pool: H160,
 }
 
 impl BalancerSwap {
-    fn from_transaction(
+    fn parse_kind(
         tx: &Transaction,
         balancer_pools: &HashSet<H160>,
         tokens: &HashMap<H160, Token>,
-    ) -> Option<BalancerSwap> {
+    ) -> Option<Kind> {
         let pool = tx.to.filter(|to| balancer_pools.contains(to))?;
-
-        if (tx.input.0.len() - 4) % 32 != 0 {
-            log::warn!("unsupported input size");
-            return None;
-        }
 
         let method = match &tx.input.0[0..4] {
             [0x82, 0x01, 0xaa, 0x3f] => BalancerSwapMethod::ExactAmountIn,
@@ -193,14 +173,12 @@ impl BalancerSwap {
             return None;
         }
 
-        Some(BalancerSwap {
-            gas_price: tx.gas_price,
-            tx_hash: tx.hash,
+        Some(Kind::BalancerSwap(BalancerSwap {
             token_out,
             token_in,
             method,
             pool,
-        })
+        }))
     }
 
     fn conflicts(&self, token_in: H160, token_out: H160, pool: H160) -> bool {
