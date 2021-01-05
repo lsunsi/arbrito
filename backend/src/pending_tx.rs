@@ -3,6 +3,7 @@ use itertools::Itertools;
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
+    str::FromStr,
 };
 use web3::types::{Transaction, H160, H256, U256};
 
@@ -20,13 +21,13 @@ impl PendingTx {
         balancer_pools: &HashSet<H160>,
         tokens: &HashMap<H160, Token>,
     ) -> Option<PendingTx> {
-        if (tx.input.0.len() - 4) % 32 != 0 {
-            log::warn!("unsupported input size");
+        if tx.input.0.len() < 4 {
             return None;
         }
 
-        UniswapSwap::parse_kind(tx, uniswap_router_address, tokens)
+        WeskerOperation::parse_kind(tx)
             .or_else(|| BalancerSwap::parse_kind(tx, balancer_pools, tokens))
+            .or_else(|| UniswapSwap::parse_kind(tx, uniswap_router_address, tokens))
             .map(|kind| PendingTx {
                 gas_price: tx.gas_price,
                 hash: tx.hash,
@@ -38,6 +39,7 @@ impl PendingTx {
         match &self.kind {
             Kind::UniswapSwap(s) => s.conflicts(token_from, token_to),
             Kind::BalancerSwap(s) => s.conflicts(token_from, token_to, balancer_pool),
+            Kind::WeskerOperation(_) => true,
         }
     }
 }
@@ -46,6 +48,7 @@ impl PendingTx {
 enum Kind {
     UniswapSwap(UniswapSwap),
     BalancerSwap(BalancerSwap),
+    WeskerOperation(WeskerOperation),
 }
 
 #[derive(Debug)]
@@ -86,7 +89,7 @@ impl UniswapSwap {
     ) -> Option<Kind> {
         tx.to.filter(|&to| to == uniswap_router_address)?;
 
-        if tx.input.0.len() < 4 {
+        if (tx.input.0.len() - 4) % 32 != 0 {
             return None;
         }
 
@@ -153,6 +156,10 @@ impl BalancerSwap {
     ) -> Option<Kind> {
         let pool = tx.to.filter(|to| balancer_pools.contains(to))?;
 
+        if (tx.input.0.len() - 4) % 32 != 0 {
+            return None;
+        }
+
         let method = match &tx.input.0[0..4] {
             [0x82, 0x01, 0xaa, 0x3f] => BalancerSwapMethod::ExactAmountIn,
             [0x7c, 0x5e, 0x9e, 0xa4] => BalancerSwapMethod::ExactAmountOut,
@@ -208,5 +215,30 @@ impl Debug for BalancerSwap {
                 .collect::<Vec<_>>()
                 .join(" -> ")
         )
+    }
+}
+
+#[derive(Debug)]
+struct WeskerOperation;
+
+impl WeskerOperation {
+    fn parse_kind(tx: &Transaction) -> Option<Kind> {
+        if tx.to != Some(H160::from_str("0000000000007f150bd6f54c40a34d7c3d5e9f56").unwrap()) {
+            return None;
+        }
+
+        match &tx.input.0[0..4] {
+            [0x03, 0x03, 0x19, 0x1c]
+            | [0x00, 0x03, 0x19, 0x1c]
+            | [0x03, 0x02, 0x19, 0x1c]
+            | [0x01, 0x02, 0x19, 0x1c]
+            | [0x01, 0x03, 0x19, 0x1c]
+            | [0x03, 0x02, 0xe8, 0x92]
+            | [0x00, 0x02, 0x19, 0x1c]
+            | [0x01, 0x02, 0xe8, 0x92]
+            | [0x00, 0x02, 0xe8, 0x92]
+            | [0x03, 0x03, 0xe8, 0x92] => Some(Kind::WeskerOperation(WeskerOperation)),
+            _ => None,
+        }
     }
 }
