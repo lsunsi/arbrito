@@ -28,7 +28,6 @@ const WETH_ADDRESS: &str = "C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
 const ARBRITO_ADDRESS: &str = "3FE133c5b1Aa156bF7D8Cf3699794d09Ef911ec1";
 const EXECUTOR_ADDRESS: &str = "Af43007aD675D6C72E96905cf4d8acB58ba0E041";
 const UNISWAP_ROUTER_ADDRESS: &str = "7a250d5630B4cF539739dF2C5dAcb4c659F2488D";
-const TARGET_WETH_PROFIT: u128 = 10_000_000_000_000_000; // 0.01 eth
 const EXPECTED_GAS_USAGE: u128 = 350_000;
 const MAX_GAS_USAGE: u128 = 400_000;
 const MIN_GAS_SCALE: u8 = 2;
@@ -87,7 +86,6 @@ struct Block {
 struct Config {
     expected_gas_usage: U256,
     max_gas_usage: U256,
-    target_weth_profit: U256,
     min_gas_scale: u8,
     max_gas_scale: u8,
 }
@@ -268,17 +266,10 @@ impl ArbritagePair {
             uniswap_out_given_in(ri, ro, profit)
         };
 
-        if weth_profit <= ctx.config.target_weth_profit {
-            return ArbritageResult::GrossProfit {
-                amount: borrow_amount,
-                weth_profit,
-            };
-        }
-
         let min_gas_price = ctx.block.gas_price * ctx.config.min_gas_scale;
         let max_gas_price = (ctx.block.gas_price * ctx.config.max_gas_scale)
-            .min((weth_profit - ctx.config.target_weth_profit) / ctx.config.expected_gas_usage)
-            .min(ctx.block.balance / ctx.config.max_gas_usage);
+            .min(ctx.block.balance / ctx.config.max_gas_usage)
+            .min(weth_profit / ctx.config.expected_gas_usage);
 
         if max_gas_price < min_gas_price {
             if ctx.block.balance / ctx.config.max_gas_usage < min_gas_price {
@@ -545,7 +536,6 @@ async fn main() {
         H160::from_str(UNISWAP_ROUTER_ADDRESS).expect("failed parsing uniswap router address");
 
     let config = Config {
-        target_weth_profit: U256::from(TARGET_WETH_PROFIT),
         expected_gas_usage: U256::from(EXPECTED_GAS_USAGE),
         max_gas_usage: U256::from(MAX_GAS_USAGE),
         min_gas_scale: MIN_GAS_SCALE,
@@ -635,8 +625,8 @@ async fn main() {
             block,
         };
 
-        let min_required_profit = config.target_weth_profit
-            + block.gas_price * config.min_gas_scale * config.expected_gas_usage;
+        let min_required_profit =
+            block.gas_price * config.min_gas_scale * config.expected_gas_usage;
 
         log::info!(
             "{} Min required profit {} @ {} gwei",
