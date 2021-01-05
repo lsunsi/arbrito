@@ -444,7 +444,7 @@ async fn execute(
 
     let receipt = loop {
         tokio::select! {
-            receipt = txs.next() => if let Some(receipt) = receipt {
+            receipt = txs.next(), if !txs.is_empty() => if let Some(receipt) = receipt {
                 break Some(receipt);
             },
             conflicting_tx = conflicting_txs_rx.recv() => if let Some(conflicting_tx) = conflicting_tx {
