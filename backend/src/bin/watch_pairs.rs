@@ -1,5 +1,8 @@
 use colored::Colorize;
-use ethcontract::{Account, BlockId, BlockNumber, GasPrice, Password, TransactionCondition};
+use ethcontract::{
+    errors::{ExecutionError, MethodError},
+    Account, BlockId, BlockNumber, GasPrice, Password, TransactionCondition,
+};
 use futures::{future::ready, stream::FuturesUnordered, FutureExt};
 use itertools::Itertools;
 use pooller::{
@@ -433,10 +436,12 @@ async fn execute(
     let mut last_gas_price = min_gas_price;
     txs.push(send_tx(last_gas_price));
 
-    let receipt = loop {
+    let receipts = loop {
         tokio::select! {
             receipt = txs.next(), if !txs.is_empty() => if let Some(receipt) = receipt {
-                break Some(receipt);
+                let mut receipts: Vec<_> = txs.collect().await;
+                receipts.push(receipt);
+                break receipts;
             },
             conflicting_tx = conflicting_txs_rx.recv() => if let Some(conflicting_tx) = conflicting_tx {
                 let new_gas_price = conflicting_tx.gas_price + U256::exp10(9);
@@ -452,20 +457,34 @@ async fn execute(
                 }
             },
         };
-    }.unwrap();
+    };
 
-    match receipt {
-        Err(_) => log::info!(
-            "{} {}",
-            format_block_number(attempt.block.number),
-            "Arbitrage execution failed".red().dimmed(),
-        ),
-        Ok(receipt) => log::info!(
-            "{} {} Transaction hash {}",
+    if let Some(receipt) = receipts.iter().find_map(|r| r.as_ref().ok()) {
+        log::info!(
+            "{} {} Transaction hash {:?}",
             format_block_number(attempt.block.number),
             "Arbitrage execution succeeded!".bright_green().bold(),
             receipt.hash()
-        ),
+        );
+    } else if let Some(receipt) = receipts.iter().find_map(|r| match r {
+        Err(MethodError {
+            inner: ExecutionError::Failure(receipt),
+            ..
+        }) => Some(receipt),
+        _ => None,
+    }) {
+        log::info!(
+            "{} {} Transaction hash {:?}",
+            format_block_number(attempt.block.number),
+            "Arbitrage execution failed".red().dimmed(),
+            receipt.transaction_hash
+        )
+    } else {
+        log::info!(
+            "{} {}",
+            format_block_number(attempt.block.number),
+            "Arbitrage execution failed".red().dimmed(),
+        )
     }
 }
 
