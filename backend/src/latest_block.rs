@@ -63,10 +63,12 @@ impl Stream for LatestBlock {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match &mut self.request_rx {
             None => {
-                let (request_tx, request_rx) = oneshot::channel();
+                let (request_tx, mut request_rx) = oneshot::channel();
                 self.requests_tx.send(request_tx).expect("failed request");
+
+                let poll = Future::poll(Pin::new(&mut request_rx), cx);
                 self.request_rx = Some(request_rx);
-                Poll::Pending
+                poll.map(Result::ok)
             }
             Some(request_rx) => {
                 let request_rx = Pin::new(request_rx);
@@ -87,8 +89,11 @@ async fn task(
     let mut request = None;
     let mut open = true;
 
-    let stream = web3.eth_subscribe().subscribe_new_heads();
-    let mut stream = stream.await.expect("failed subscribing to new heads");
+    let mut stream = web3
+        .eth_subscribe()
+        .subscribe_new_heads()
+        .await
+        .expect("failed subscribing to new heads");
 
     while open || request.is_some() {
         tokio::select! {
