@@ -20,13 +20,12 @@ use std::{
 use tokio::sync::{mpsc, Mutex, OwnedMutexGuard};
 use web3::{
     futures::{future::join_all, StreamExt},
-    transports::WebSocket,
+    transports::Ipc,
     types::U64,
     types::{TransactionId, H160, U256},
     Web3,
 };
 
-const WEB3_ENDPOINT: &str = "ws://127.0.0.1:8546";
 const WETH_ADDRESS: &str = "C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
 const ARBRITO_ADDRESS: &str = "3FE133c5b1Aa156bF7D8Cf3699794d09Ef911ec1";
 const EXECUTOR_ADDRESS: &str = "Af43007aD675D6C72E96905cf4d8acB58ba0E041";
@@ -157,7 +156,7 @@ struct ArbritagePair {
 }
 
 impl Block {
-    async fn fetch(web3: &Web3<WebSocket>, number: U64, addr: H160) -> Block {
+    async fn fetch(web3: &Web3<Ipc>, number: U64, addr: H160) -> Block {
         let eth = web3.eth();
         let (nonce, balance, gas_price) = tokio::join!(
             eth.transaction_count(addr, Some(BlockNumber::Number(number))),
@@ -492,7 +491,8 @@ async fn execute(
 async fn main() {
     env_logger::init();
 
-    let web3 = Web3::new(WebSocket::new(WEB3_ENDPOINT).await.expect("ws failed"));
+    let web3_ipc_path = std::env::var("WEB3_IPC_PATH").expect("where's the ipc");
+    let web3 = Web3::new(Ipc::new(web3_ipc_path).await.expect("ipc failed"));
 
     let Pairs { tokens, pairs } = Pairs::read().expect("pairs reading failed");
     let tokens: Arc<HashMap<_, _>> = Arc::new(tokens.into_iter().map(|t| (t.address, t)).collect());
