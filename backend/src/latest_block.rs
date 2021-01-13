@@ -87,8 +87,11 @@ async fn task(
     let mut request = None;
     let mut open = true;
 
-    let stream = web3.eth_subscribe().subscribe_new_heads();
-    let mut stream = stream.await.expect("failed subscribing to new heads");
+    let mut stream = web3
+        .eth_subscribe()
+        .subscribe_new_heads()
+        .await
+        .expect("failed subscribing to new heads");
 
     while open || request.is_some() {
         tokio::select! {
