@@ -6,7 +6,7 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot};
 use web3::{
-    transports::WebSocket,
+    transports::Ipc,
     types::{H160, U256, U64},
 };
 
@@ -20,7 +20,7 @@ pub struct Block {
 }
 
 impl Block {
-    async fn fetch(web3: Web3<WebSocket>, addr: H160, number: U64) -> Block {
+    async fn fetch(web3: Web3<Ipc>, addr: H160, number: U64) -> Block {
         let block_number = BlockNumber::Number(number);
 
         let eth = web3.eth();
@@ -46,7 +46,7 @@ pub struct LatestBlock {
 }
 
 impl LatestBlock {
-    pub fn new(web3: Web3<WebSocket>, executor_address: H160) -> LatestBlock {
+    pub fn new(web3: Web3<Ipc>, executor_address: H160) -> LatestBlock {
         let (requests_tx, requests_rx) = mpsc::unbounded_channel();
         tokio::spawn(task(web3, executor_address, requests_rx));
 
@@ -82,7 +82,7 @@ impl Stream for LatestBlock {
 }
 
 async fn task(
-    web3: Web3<WebSocket>,
+    web3: Web3<Ipc>,
     executor_address: H160,
     mut requests_rx: mpsc::UnboundedReceiver<oneshot::Sender<Block>>,
 ) {
