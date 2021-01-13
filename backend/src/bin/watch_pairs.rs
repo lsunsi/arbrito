@@ -31,7 +31,7 @@ const ARBRITO_ADDRESS: &str = "3FE133c5b1Aa156bF7D8Cf3699794d09Ef911ec1";
 const EXECUTOR_ADDRESS: &str = "Af43007aD675D6C72E96905cf4d8acB58ba0E041";
 const UNISWAP_ROUTER_ADDRESS: &str = "7a250d5630B4cF539739dF2C5dAcb4c659F2488D";
 const EXPECTED_GAS_USAGE: u128 = 350_000;
-const MAX_GAS_USAGE: u128 = 400_000;
+const MAX_GAS_USAGE: u128 = 1_000_000;
 const MIN_GAS_SCALE: u8 = 2;
 const MAX_GAS_SCALE: u8 = 5;
 
@@ -73,6 +73,42 @@ fn format_block_number(number: U64) -> String {
         },
         number.to_string().bright_white().dimmed()
     )
+}
+
+#[derive(Debug, Copy, Clone, Eq)]
+enum MaxGasPrice {
+    Scale(U256),
+    Balance(U256),
+    Profit(U256),
+}
+
+impl MaxGasPrice {
+    fn value(&self) -> U256 {
+        use MaxGasPrice::*;
+        match *self {
+            Scale(v) => v,
+            Balance(v) => v,
+            Profit(v) => v,
+        }
+    }
+}
+
+impl PartialEq for MaxGasPrice {
+    fn eq(&self, other: &Self) -> bool {
+        self.value().eq(&other.value())
+    }
+}
+
+impl PartialOrd for MaxGasPrice {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.value().partial_cmp(&other.value())
+    }
+}
+
+impl Ord for MaxGasPrice {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.value().cmp(&other.value())
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -132,7 +168,7 @@ enum ArbritageResult {
     NetProfit {
         weth_profit: U256,
         min_gas_price: U256,
-        max_gas_price: U256,
+        max_gas_price: MaxGasPrice,
         amount: U256,
     },
 }
@@ -269,11 +305,15 @@ impl ArbritagePair {
         };
 
         let min_gas_price = ctx.block.gas_price * ctx.config.min_gas_scale;
-        let max_gas_price = (ctx.block.gas_price * ctx.config.max_gas_scale)
-            .min(ctx.block.balance / ctx.config.max_gas_usage)
-            .min(weth_profit / ctx.config.expected_gas_usage);
+        let max_gas_price = MaxGasPrice::Scale(ctx.block.gas_price * ctx.config.max_gas_scale)
+            .min(MaxGasPrice::Balance(
+                ctx.block.balance / ctx.config.max_gas_usage,
+            ))
+            .min(MaxGasPrice::Profit(
+                weth_profit / ctx.config.expected_gas_usage,
+            ));
 
-        if max_gas_price < min_gas_price {
+        if max_gas_price.value() < min_gas_price {
             if ctx.block.balance / ctx.config.max_gas_usage < min_gas_price {
                 log::warn!(
                     "balance cannot pay min gas price. attempt won't be correctly calculated"
@@ -314,6 +354,7 @@ impl ArbritagePair {
 }
 
 async fn executor(
+    web3: Web3<Ipc>,
     arbrito: Arbrito,
     from_address: H160,
     execution_lock: Arc<Mutex<()>>,
@@ -339,7 +380,7 @@ async fn executor(
                 if let Ok(guard) = execution_lock.clone().try_lock_owned() {
                     let (conflicting_txs_tx, conflicting_txs_rx) = mpsc::unbounded_channel();
                     executing_attempt = Some((attempt.clone(), conflicting_txs_tx));
-                    tokio::spawn(execute(guard, conflicting_txs_rx, attempt, arbrito.clone(), from_address, ctx));
+                    tokio::spawn(execute(guard, web3.clone(), conflicting_txs_rx, attempt, arbrito.clone(), from_address, ctx));
                 }
             }
         }
@@ -348,6 +389,7 @@ async fn executor(
 
 async fn execute(
     _: OwnedMutexGuard<()>,
+    web3: Web3<Ipc>,
     mut conflicting_txs_rx: mpsc::UnboundedReceiver<PendingTx>,
     attempt: ArbritageAttempt,
     arbrito: Arbrito,
@@ -432,19 +474,22 @@ async fn execute(
     };
 
     let mut txs = FuturesUnordered::new();
+    let mut receipts = vec![];
     let mut last_gas_price = min_gas_price;
     txs.push(send_tx(last_gas_price));
 
-    let receipts = loop {
+    let cancel = loop {
         tokio::select! {
             receipt = txs.next(), if !txs.is_empty() => if let Some(receipt) = receipt {
-                let mut receipts: Vec<_> = txs.collect().await;
                 receipts.push(receipt);
-                break receipts;
+                break false;
             },
             conflicting_tx = conflicting_txs_rx.recv() => if let Some(conflicting_tx) = conflicting_tx {
                 let new_gas_price = conflicting_tx.gas_price + U256::exp10(9);
-                if last_gas_price < new_gas_price && new_gas_price <= max_gas_price {
+                if new_gas_price > max_gas_price.value() {
+                    log::warn!("Max gas price reached {:?}", max_gas_price);
+                    break true;
+                } else if last_gas_price < new_gas_price {
                     last_gas_price = new_gas_price;
                     txs.push(send_tx(last_gas_price));
                     log::info!(
@@ -457,6 +502,31 @@ async fn execute(
             },
         };
     };
+
+    if cancel {
+        let tx_hash = web3
+            .eth()
+            .send_transaction(web3::types::TransactionRequest {
+                from: from_address,
+                to: Some(from_address),
+                gas: None,
+                gas_price: Some(last_gas_price + U256::exp10(9)),
+                value: None,
+                data: None,
+                nonce: Some(attempt.block.nonce),
+                condition: None,
+            })
+            .await
+            .expect("failed sending noop transaction");
+
+        log::info!(
+            "{} Sent noop transaction {:?}",
+            format_block_number(attempt.block.number),
+            tx_hash
+        );
+    }
+
+    receipts.extend(txs.collect::<Vec<_>>().await);
 
     if let Some(receipt) = receipts.iter().find_map(|r| r.as_ref().ok()) {
         log::info!(
@@ -566,6 +636,7 @@ async fn main() {
     let (pending_txs_tx, pending_txs_rx) = mpsc::unbounded_channel();
 
     tokio::spawn(executor(
+        web3.clone(),
         arbrito.clone(),
         executor_address,
         execution_lock.clone(),
@@ -708,7 +779,7 @@ async fn main() {
                     max_attempt.tokens.1.symbol,
                     format_amount_colored(&weth, weth_profit),
                     min_gas_price / U256::exp10(9),
-                    max_gas_price / U256::exp10(9),
+                    max_gas_price.value() / U256::exp10(9),
                 );
 
                 if let Err(_) = execution_tx.send((max_attempt, context)) {
